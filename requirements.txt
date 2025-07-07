@@ -1,0 +1,10 @@
+langchain
+langchain-community
+faiss-cpu
+langchain-openai
+openai
+unstructured[docx]
+sentence-transformers
+python-dotenv
+tiktoken 
+Flask
