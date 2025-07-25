@@ -102,6 +102,23 @@ class Chatbot:
             return classification
         return None # Devolvemos None si la clasificación falla
 
+    def _extract_name(self, name_city_text):
+        """Usa el LLM para extraer el nombre de pila del usuario de un texto."""
+        extraction_prompt_text = f"""
+        De la siguiente frase, extrae únicamente el nombre de pila del usuario.
+        Ejemplo: si la frase es "Soy Carlos de Lima", la respuesta debe ser "Carlos".
+        Devuelve solo el nombre, sin explicaciones ni texto adicional.
+        Frase: "{name_city_text}"
+        Nombre de pila:
+        """
+        response = self.llm.invoke(extraction_prompt_text)
+        name = response.content.strip()
+        
+        # Si el LLM no devuelve nada, usamos la primera palabra como fallback.
+        if not name:
+            return name_city_text.split()[0]
+        return name
+
     def _generate_response(self, prompt_text):
         """Genera una respuesta directa del LLM para mensajes conversacionales."""
         # Usamos el mismo LLM pero sin el contexto de RAG
@@ -133,7 +150,7 @@ class Chatbot:
                     return response['answer']
                 
                 self.user_data['name_city'] = user_input
-                user_name = user_input.split()[0]
+                user_name = self._extract_name(user_input)
                 self.user_data['name'] = user_name
                 self.state = ConversationState.AWAITING_ROLE_INPUT
                 prompt = f"Actúas como Xtalento Bot. El usuario se llama {user_name}. Dale una bienvenida personalizada (sin usar la palabra 'Hola') y luego pregúntale sobre su cargo actual o al que aspira para poder darle una mejor asesoría."
@@ -165,7 +182,7 @@ class Chatbot:
                 return response_text
 
             elif self.state == ConversationState.AWAITING_SERVICE_CHOICE:
-                service_keywords = ['hoja de vida', 'ats', 'perfil', 'plataforma', 'entrevista', 'estrategia', 'búsqueda', '1', '2', '3', '4']
+                service_keywords = ['hoja de vida', 'ats', 'perfil', 'plataforma', 'entrevista', 'estrategia', 'búsqueda', '1', '2', '3', '4', 'mejora','mejorar','preparación']
                 is_service_choice = any(keyword in user_input.lower() for keyword in service_keywords)
 
                 if not is_service_choice:
