@@ -99,38 +99,17 @@ def _extract_text_from_baileys(message_obj: dict) -> str | None:
                 return message_obj.get(field)
     return None
 
-def send_whatsapp_text(number: str, text: str, remote_jid: str | None = None) -> tuple[int, str]:
-    """Envía texto intentando variantes de endpoint y payload según versión de Evolution.
-    Soporta chats individuales (number) y grupos (groupJid/groupId).
-    """
+def send_whatsapp_text(number: str, text: str) -> tuple[int, str]:
+    """Envía texto (solo chats 1:1) probando variantes de endpoint y payload según versión de Evolution."""
     endpoints = [
         f"{EVO_API_URL}/message/sendText/{EVO_INSTANCE}",
         f"{EVO_API_URL}/v2/message/sendText/{EVO_INSTANCE}",
     ]
-    is_group = False
-    group_jid_candidates: list[str] = []
-    if remote_jid and isinstance(remote_jid, str) and remote_jid.endswith("@g.us"):
-        is_group = True
-        group_jid_candidates.append(remote_jid)
-    if ("-" in (number or "")) and not group_jid_candidates:
-        # reconstruye candidato de group jid si viene sin sufijo
-        group_jid_candidates.append(f"{number}@g.us")
-
-    payload_variants: list[dict] = []
-    if is_group or group_jid_candidates:
-        # Variantes para grupos
-        for gj in group_jid_candidates:
-            payload_variants.extend([
-                {"groupJid": gj, "text": text},
-                {"groupId": gj, "text": text},
-                {"groupJid": gj, "options": {"presence": "composing"}, "textMessage": {"text": text}},
-            ])
-    # Variantes para chat 1:1
-    payload_variants.extend([
+    payload_variants: list[dict] = [
         {"number": number, "text": text},  # muchas versiones requieren 'text' plano
         {"number": number, "message": text},  # alternativa legacy
         {"number": number, "options": {"presence": "composing"}, "textMessage": {"text": text}},  # variante moderna
-    ])
+    ]
     retry_statuses = set([429] + list(range(500, 600)))
     last_status, last_text = 0, ""
     for attempt in range(3):
@@ -292,7 +271,7 @@ def webhook():
                 return jsonify({"ok": True, "skip": "no-text"}), 200
 
             # Encolar procesamiento en background para responder sin bloquear el webhook
-            EXECUTOR.submit(handle_message_async_with_remote, sender_number, text_in, remote_jid)
+            EXECUTOR.submit(handle_message_async, sender_number, text_in)
             print(f"[ENQUEUED] reply task for {sender_number}")
 
         elif event in ("QRCODE_UPDATED", "CONNECTION_UPDATE"):
