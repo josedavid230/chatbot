@@ -176,6 +176,7 @@ class Chatbot:
                 3. Preparación para Entrevistas
                 4. Estrategia de búsqueda de empleo
                 Usa un emoji como 🚀 al final de la introducción.
+                sin usar la palabra Hola de nuevo, recuerda que el usuario ya te saludó.
                 """
                 response_text = self._generate_response(prompt)
                 self.chat_history.append(AIMessage(content=response_text))
