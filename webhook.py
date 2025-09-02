@@ -24,11 +24,11 @@ import os
 import requests
 
 # 1) Configuración
-load_dotenv()
-EVO_API_URL = os.getenv("EVO_API_URL", "http://localhost:8080")
+load_dotenv(override=True)
+EVO_API_URL = os.getenv("EVO_API_URL", "https://evolution-api-domain.com")
 EVO_APIKEY = os.getenv("EVO_APIKEY", "j.d1036448838")
 EVO_INSTANCE = os.getenv("EVO_INSTANCE", "test")
-PUBLIC_WEBHOOK_URL = os.getenv("PUBLIC_WEBHOOK_URL", "http://localhost:8000/webhook")
+PUBLIC_WEBHOOK_URL = os.getenv("PUBLIC_WEBHOOK_URL", "https://tu-dominio.com/webhook")
 WEBHOOK_BY_EVENTS = os.getenv("WEBHOOK_BY_EVENTS", "false").strip().lower() in ("1", "true", "yes")
 MAX_WORKERS = int(os.getenv("WEBHOOK_MAX_WORKERS", "16"))
 
@@ -297,5 +297,9 @@ def clear_sessions():
 if __name__ == "__main__":
     # Opcional: registra automáticamente el webhook al iniciar
     # register_webhook()
-    # Para mayor concurrencia en desarrollo, activar threaded=True
-    app.run(host="0.0.0.0", port=8000, debug=False, threaded=True, use_reloader=False)
+    # Para desarrollo local usar: app.run(host="0.0.0.0", port=8000, debug=False, threaded=True, use_reloader=False)
+    # Para producción en VPS usar: waitress-serve --listen=0.0.0.0:8000 webhook:app
+    print("=== MODO PRODUCCIÓN VPS ===")
+    print("Ejecutar: waitress-serve --listen=0.0.0.0:8000 webhook:app")
+    print("O usar: python webhook.py para auto-configuración")
+    print("Asegúrate de configurar las variables de entorno en .env")
