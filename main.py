@@ -169,6 +169,19 @@ class Chatbot:
 
     def process_message(self, user_input):
         try:
+            # Detectar solicitud de agente humano en cualquier momento de la conversación
+            if user_input:
+                text_l = user_input.strip().lower()
+                agent_keywords = ["agente", "humano", "ventas", "persona", "asesor", "necesito un asesor", "quiero hablar con alguien", "hablar con una persona", "contactar con alguien", "hablar con un humano"]
+                if any(keyword in text_l for keyword in agent_keywords):
+                    # Guardar en historial antes de pausar
+                    self.chat_history.append(HumanMessage(content=user_input))
+                    self.state = ConversationState.PROVIDING_INFO
+                    return (
+                        "Perfecto. Pauso este chat y un agente de ventas te contactará en este mismo canal en las próximas 3 horas. "
+                        "Si deseas retomar con el bot más tarde, inicia una nueva conversación."
+                    )
+            
             # Los saludos iniciales no necesitan memoria ni RAG
             if self.state == ConversationState.AWAITING_GREETING:
                 self.state = ConversationState.AWAITING_NAME_CITY
@@ -274,12 +287,18 @@ class Chatbot:
 
                   
                     Formato de salida (en español, claro y consistente). Sigue estos encabezados en este orden, en texto plano:
-                    - servicio o servicios escogidos: <lista breve de los servicios tal como aparecen en el contexto>
-                    - informacion sobre el servicio o servicios: <qué incluye, cómo funciona y tiempos si están en contexto>
-                    - precio del servicio o servicios: <aplica la política de precios arriba descrita para (1) Hoja de vida = 50.000$ y (2) Mejora de perfil = 80.000$; para el resto usa el contexto o indica si falta>
-                    - paso 1: llenar el formulario {PAYMENT_FORM_URL} (indica que este paso es fundamental para poder seguir)
-                    - paso 2: SOLO si entre los servicios hay 'hoja de vida'/'cv'/'currículum'/'ATS'/'1'/Elaboración: pedir la hoja de vida actual; si no la tiene, pedir documento con nombres, cédula, estudios y experiencias laborales. Si NO aplica, escribe: 'paso 2: (no aplica)'
-                    - paso 3: formas de pagar y confirmar pago: incluye las cuentas/medios de pago que estan en el RAG SI no acá están Banco: bancolmbia \n tipo: ahorros \n numero: 10015482343 \n titular: gina paola cano \n nequi: 3128186587.
+                    
+                    Servicio o servicios escogidos: <lista breve de los servicios tal como aparecen en el contexto>
+
+                    informacion sobre el servicio o servicios: <qué incluye, cómo funciona y tiempos si están en contexto>
+
+                    precio del servicio o servicios: <aplica la política de precios arriba descrita para (1) Hoja de vida = 50.000$ y (2) Mejora de perfil = 80.000$; para el resto usa el contexto o indica si falta>
+                    
+                    - Paso 1: llenar el formulario {PAYMENT_FORM_URL} (indica que este paso es fundamental para poder seguir)
+
+                    - Paso 2: SOLO si entre los servicios hay 'hoja de vida'/'cv'/'currículum'/'ATS'/'1'/Hoja de vida/ Hoja/ hoja/Elaboración: pedir la hoja de vida actual; si no la tiene, pedir documento con nombres, cédula, estudios y experiencias laborales. Si NO aplica, escribe: 'paso 2: (no aplica)'
+
+                    - Paso 3: formas de pagar y confirmar pago: incluye las cuentas/medios de pago que estan en el RAG SI no acá están Banco: bancolmbia \n tipo: ahorros \n numero: 10015482343 \n titular: gina paola cano \n nequi: 3128186587.
 
                     Cierra indicando: 'Confirma cuando completes el formulario (paso 1) y cuando realices el pago (paso 3)'. Evita saludos iniciales. Por favor trata de no sobrepasar los 400 tokens.
                     """
@@ -291,7 +310,7 @@ class Chatbot:
             elif self.state == ConversationState.PROVIDING_INFO:
                 # Detectar elección del usuario cuando no sabemos responder
                 text_l = (user_input or "").strip().lower()
-                if any(x in text_l for x in ["agente", "humano", "ventas", "persona", "asesor"]) and any(x in text_l for x in ["hablar", "quiero", "prefiero", "conectar", "contacto"]):
+                if any(x in text_l for x in ["agente", "humano", "ventas", "persona", "asesor", "necesito un asesor", "quiero hablar con alguien", "hablar con una persona"]):
                     self.state = ConversationState.PROVIDING_INFO
                     return (
                         "Perfecto. Pauso este chat y un agente de ventas te contactará en este mismo canal. "

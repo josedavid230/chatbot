@@ -1,27 +1,21 @@
-# Caddyfile para VPS del Chatbot Xtalento
-# Coloca este archivo como "Caddyfile" en el VPS del chatbot
+{
+    # Configuración global con email para certificados SSL
+    email info@xtalento.com.co
+}
 
-# Dominio del chatbot
+# Evolution API en puerto estándar HTTPS (443)
+evo.xtalento.com.co {
+    reverse_proxy localhost:8080
+}
+
+# Chatbot en puerto estándar HTTPS (443)
 bot.xtalento.com.co {
-    # SSL automático por Caddy
+    reverse_proxy localhost:8000
     
-    # Webhook principal del chatbot
     handle /webhook {
-        reverse_proxy localhost:8000 {
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-            
-            # Timeouts para mensajes largos
-            transport http {
-                read_timeout 300s
-                write_timeout 300s
-                dial_timeout 30s
-            }
-        }
+        reverse_proxy localhost:8000
     }
     
-    # Endpoints de administración del chatbot
     handle /healthz {
         reverse_proxy localhost:8000
     }
@@ -37,23 +31,4 @@ bot.xtalento.com.co {
     handle /sessions* {
         reverse_proxy localhost:8000
     }
-    
-    # Página de estado básica
-    handle / {
-        respond "🤖 Xtalento Chatbot - Sistema Operativo" 200
-    }
-    
-    # Logs personalizados
-    log {
-        output file /var/log/caddy/chatbot.log {
-            roll_size 10mb
-            roll_keep 5
-        }
-        format json
-    }
-}
-
-# Redirección opcional para www
-www.chatbot.midominio.com {
-    redir https://chatbot.midominio.com{uri} permanent
 }

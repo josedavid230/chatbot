@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import os
 import requests
+from datetime import datetime, timedelta
 
 # 1) Configuración
 load_dotenv(override=True)
@@ -53,8 +54,39 @@ VECTORSTORE = _ensure_vectorstore()
 _user_bots: dict[str, Chatbot] = {}
 _bots_lock = RLock()
 
+# Sistema de bloqueo temporal para usuarios que solicitan agente humano
+_blocked_users: dict[str, datetime] = {}
+_blocked_lock = RLock()
+BLOCK_DURATION_HOURS = 4
+
 # Pool de hilos para procesar mensajes en background
 EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+
+def is_user_blocked(sender_number: str) -> bool:
+    """Verifica si el usuario está bloqueado temporalmente."""
+    key = sender_number or "anonymous"
+    with _blocked_lock:
+        if key in _blocked_users:
+            block_time = _blocked_users[key]
+            # Verificar si han pasado las 4 horas
+            if datetime.now() - block_time >= timedelta(hours=BLOCK_DURATION_HOURS):
+                # El bloqueo expiró, remover al usuario
+                del _blocked_users[key]
+                print(f"[UNBLOCK] Usuario {sender_number} desbloqueado automáticamente")
+                return False
+            else:
+                # Usuario sigue bloqueado
+                remaining = block_time + timedelta(hours=BLOCK_DURATION_HOURS) - datetime.now()
+                print(f"[BLOCKED] Usuario {sender_number} bloqueado por {remaining}")
+                return True
+        return False
+
+def block_user(sender_number: str):
+    """Bloquea temporalmente al usuario por 4 horas."""
+    key = sender_number or "anonymous"
+    with _blocked_lock:
+        _blocked_users[key] = datetime.now()
+        print(f"[BLOCK] Usuario {sender_number} bloqueado por {BLOCK_DURATION_HOURS} horas")
 
 def get_user_bot(sender_number: str) -> Chatbot:
     """Devuelve un bot por número; crea uno nuevo si no existe (memoria aislada por usuario)."""
@@ -137,11 +169,23 @@ def send_whatsapp_text(number: str, text: str) -> tuple[int, str]:
 def handle_message_async(sender_number: str, text_in: str) -> None:
     """Procesa el mensaje y envía la respuesta en background."""
     try:
+        # Verificar si el usuario está bloqueado
+        if is_user_blocked(sender_number):
+            print(f"[SKIP] Usuario {sender_number} está bloqueado temporalmente")
+            return
+        
         user_bot = get_user_bot(sender_number)
         reply_text = user_bot.process_message(text_in) or "🤖"
+        
+        # Detectar si el bot activó el modo agente humano
+        if "Perfecto. Pauso este chat" in reply_text:
+            print(f"[AGENT MODE] Bloqueando usuario {sender_number} por {BLOCK_DURATION_HOURS} horas")
+            block_user(sender_number)
+            
     except Exception as e:
         reply_text = "Lo siento, tuve un problema procesando tu mensaje."
         print("[BOT] ERROR (bg):", e)
+    
     status, body = send_whatsapp_text(sender_number, reply_text)
     print(f"[SEND (bg)] -> {sender_number} [{status}] {body}")
 
@@ -293,6 +337,41 @@ def clear_sessions():
     with _bots_lock:
         _user_bots.clear()
     return jsonify({"ok": True, "cleared": True}), 200
+
+# Gestión de usuarios bloqueados
+@app.get("/blocked_users")
+def list_blocked_users():
+    """Lista usuarios bloqueados y tiempo restante."""
+    with _blocked_lock:
+        blocked_info = {}
+        current_time = datetime.now()
+        for user, block_time in _blocked_users.items():
+            remaining = block_time + timedelta(hours=BLOCK_DURATION_HOURS) - current_time
+            if remaining.total_seconds() > 0:
+                blocked_info[user] = {
+                    "blocked_at": block_time.isoformat(),
+                    "remaining_seconds": int(remaining.total_seconds()),
+                    "remaining_readable": str(remaining).split('.')[0]
+                }
+        return jsonify({"blocked_users": blocked_info}), 200
+
+@app.delete("/blocked_users")
+def clear_blocked_users():
+    """Limpia todos los bloqueos (para emergencias)."""
+    with _blocked_lock:
+        count = len(_blocked_users)
+        _blocked_users.clear()
+    return jsonify({"ok": True, "unblocked_count": count}), 200
+
+@app.delete("/blocked_users/<user_number>")
+def unblock_specific_user(user_number: str):
+    """Desbloquea un usuario específico."""
+    with _blocked_lock:
+        if user_number in _blocked_users:
+            del _blocked_users[user_number]
+            return jsonify({"ok": True, "unblocked": user_number}), 200
+        else:
+            return jsonify({"ok": False, "error": "Usuario no estaba bloqueado"}), 404
 
 if __name__ == "__main__":
     # Opcional: registra automáticamente el webhook al iniciar
