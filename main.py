@@ -159,15 +159,14 @@ class Chatbot:
         )
 
     def _continue_conversation(self, user_text: str, guidance: str) -> str:
-        """Genera una respuesta que mantenga la conversación sin depender de RAG cuando algo no se puede clasificar o detectar."""
-        prompt = (
-            "Actúas como Xtalento Bot. "
-            f"Mensaje del usuario: '{user_text}'. "
-            f"Objetivo: {guidance}. "
-            "IMPORTANTE: Solo responde con información que tengas conocimiento confirmado. Si no tienes conocimiento suficiente sobre algo específico, di: 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.' "
-            "Responde de forma clara, útil y breve; si corresponde, haz una pregunta para avanzar."
+        """Responde cuando no se detecta una respuesta válida, ofreciendo opciones claras al usuario."""
+        return (
+            "No se detectó una respuesta válida. "
+            "¿Qué prefieres?\n\n"
+            "1) Te puedo remitir con un agente de ventas\n"
+            "2) Puedes seguir haciéndome preguntas\n\n"
+            "Si quieres hablar con un agente, escribe 'agente'."
         )
-        return self._generate_response(prompt)
 
     def process_message(self, user_input):
         try:
@@ -215,11 +214,7 @@ class Chatbot:
                 if not role_classification:
                     print(f"[DEBUG] No se pudo clasificar el rol. Continuando la conversación sin error.")
                     self.state = ConversationState.AWAITING_SERVICE_CHOICE
-                    guidance = (
-                        "no se pudo clasificar el cargo; presenta la lista de servicios (1-4) y pide al usuario elegir uno, "
-                        "o que cuente brevemente su cargo para recomendarle mejor"
-                    )
-                    response_text = self._continue_conversation(user_input, guidance)
+                    response_text = self._continue_conversation(user_input, "")
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
 
@@ -251,11 +246,7 @@ class Chatbot:
 
                 if not is_service_choice:
                     print(f"[DEBUG] No se detectó una selección de servicio. Continuando sin interrumpir.")
-                    guidance = (
-                        "orienta brevemente sobre los servicios disponibles (1-6) y solicita elegir uno o varios; "
-                        "si el usuario hizo una pregunta, respóndela con tu conocimiento general y vuelve a ofrecer la lista"
-                    )
-                    response_text = self._continue_conversation(user_input, guidance)
+                    response_text = self._continue_conversation(user_input, "")
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
 
@@ -315,12 +306,17 @@ class Chatbot:
                 # Opción de seguir con el bot y explorar servicios
                 text_l = (user_input or "").strip().lower()
                 if any(x in text_l for x in ["seguir", "continuar", "bot", "opciones", "servicios", "2", "dos"]):
-                    guidance = (
-                        "presenta SOLO servicios disponibles de Xtalento que tengas confirmados en tu conocimiento y guía a escoger uno; "
-                        "Si no tienes conocimiento completo sobre algún servicio, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.' "
-                        "propón agendar una sesión virtual como siguiente paso, quiero que si el cliente dice que le interesa el metodo x  (solo con el metodo x) y quiere agendar una asesoria no le digas nada sobre pagos porque esta asesoria es gratuita"
+                    response_text = (
+                        "Perfecto, sigamos. Te recuerdo nuestros servicios disponibles:\n\n"
+                        "1. Optimización de Hoja de Vida (ATS)\n"
+                        "2. Mejora de perfil en plataformas de empleo\n"
+                        "3. Preparación para Entrevistas\n"
+                        "4. Estrategia de búsqueda de empleo\n"
+                        "5. Simulación de entrevista con feedback\n"
+                        "6. **Método X** (recomendado)\n"
+                        "7. Test EPI (Evaluación de Personalidad Integral)\n\n"
+                        "¿Cuál te interesa? Puedes elegir por número o nombre del servicio."
                     )
-                    response_text = self._continue_conversation(user_input, guidance)
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
 
