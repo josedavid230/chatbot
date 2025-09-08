@@ -61,19 +61,18 @@ class Chatbot:
         - La garantía de superar filtros ATS.
         - El respaldo de casos reales y experiencia.
 
-        Política de conocimiento y ventas:
-        - Responde solo con información que tengas en tu conocimiento y en el contexto proporcionado (RAG). No inventes servicios ni datos.
-        - Si no cuentas con información suficiente para responder con precisión, NO improvises.
-        - En su lugar, ofrece dos opciones:
-          1) Derivar a un agente de ventas humano (indicando que el agente responderá en ~3 horas y que se pausará este chat)
-          2) Explorar otros servicios disponibles (estrictamente los que aparezcan en el contexto)
-        - Si el usuario decide seguir con el bot, tu objetivo principal es vender un servicio y proponer agendar una sesión virtual.
+        🚨 POLÍTICA DE CONOCIMIENTO ESTRICTA:
+        - SOLO habla de lo que tienes conocimiento confirmado en el contexto proporcionado (RAG).
+        - NO inventes información, servicios, precios o datos que no estén en tu base de conocimiento.
+        - Si no tienes conocimiento suficiente sobre algo que te preguntan, responde honestamente: "Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra 'agente' en el chat."
+        - Si el usuario menciona "agente" en cualquier momento, conecta inmediatamente con un agente humano.
+        - Si el usuario decide seguir con el bot después de no tener información, tu objetivo principal es vender un servicio disponible en tu conocimiento y proponer agendar una sesión virtual.
         - Usa emojis con calidez, sin perder profesionalismo. Sé concreto y con orientación clara a la acción.
         """
         
         retriever = vectorstore.as_retriever()
 
-        contextualize_q_system_prompt = """Dada una conversación y una pregunta de seguimiento, reformula la pregunta de seguimiento para que sea una pregunta independiente, en su idioma original. El nombre del usuario es {user_name}."""
+        contextualize_q_system_prompt = """Dada una conversación y una pregunta de seguimiento, reformula la pregunta de seguimiento para que sea una pregunta independiente, en su idioma original. El nombre del usuario es {user_name}. IMPORTANTE: Solo utiliza información que esté confirmada en el contexto de la conversación. Si no tienes conocimiento suficiente, indica que no tienes esa información y que el cliente se puede comunicar con un agente humano. copiando la palabra agente en el chat"""
         contextualize_q_prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", contextualize_q_system_prompt),
@@ -104,6 +103,7 @@ class Chatbot:
         """Usa el LLM para clasificar un rol en operativo, táctico o estratégico."""
         classification_prompt_text = f"""
         Clasifica el siguiente cargo únicamente como 'operativo', 'táctico' o 'estratégico'. No agregues ninguna otra palabra o explicación.
+        IMPORTANTE: Solo clasifica si tienes conocimiento suficiente sobre el cargo. Si no puedes clasificar con certeza, responde 'no_clasificable'.
         Cargo: "{role_description}"
         Clasificación:
         """
@@ -119,6 +119,7 @@ class Chatbot:
         extraction_prompt_text = f"""
         De la siguiente frase, extrae únicamente el nombre de pila del usuario.
         Ejemplo: si la frase es "Soy Carlos de Lima", la respuesta debe ser "Carlos".
+        IMPORTANTE: Solo extrae el nombre si está claramente presente. Si no puedes identificar un nombre con certeza, responde 'no_identificable'.
         Devuelve solo el nombre, sin explicaciones ni texto adicional.
         Frase: "{name_city_text}"
         Nombre de pila:
@@ -151,10 +152,10 @@ class Chatbot:
     def _build_unknown_options_message(self) -> str:
         """Devuelve el mensaje estándar de opciones cuando no hay suficiente información."""
         return (
-            "No tengo suficiente información para darte una respuesta precisa ahora mismo. "
+            "Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra 'agente' en el chat. "
             "¿Qué prefieres que hagamos?\n\n"
-            "1) Hablar con un agente de ventas humano (pausamos este chat y te contactarán en ~3 horas).\n"
-            "2) Seguir conmigo y explorar otros servicios de Xtalento disponibles."
+            "1) Hablar con un agente humano (menciona 'agente' para conectarte inmediatamente).\n"
+            "2) Seguir conmigo y explorar otros servicios de Xtalento que sí conozco."
         )
 
     def _continue_conversation(self, user_text: str, guidance: str) -> str:
@@ -163,29 +164,17 @@ class Chatbot:
             "Actúas como Xtalento Bot. "
             f"Mensaje del usuario: '{user_text}'. "
             f"Objetivo: {guidance}. "
+            "IMPORTANTE: Solo responde con información que tengas conocimiento confirmado. Si no tienes conocimiento suficiente sobre algo específico, di: 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.' "
             "Responde de forma clara, útil y breve; si corresponde, haz una pregunta para avanzar."
         )
         return self._generate_response(prompt)
 
     def process_message(self, user_input):
         try:
-            # Detectar solicitud de agente humano en cualquier momento de la conversación
-            if user_input:
-                text_l = user_input.strip().lower()
-                agent_keywords = ["agente", "humano", "ventas", "persona", "asesor", "necesito un asesor", "quiero hablar con alguien", "hablar con una persona", "contactar con alguien", "hablar con un humano"]
-                if any(keyword in text_l for keyword in agent_keywords):
-                    # Guardar en historial antes de pausar
-                    self.chat_history.append(HumanMessage(content=user_input))
-                    self.state = ConversationState.PROVIDING_INFO
-                    return (
-                        "Perfecto. Pauso este chat y un agente de ventas te contactará en este mismo canal en las próximas 3 horas. "
-                        "Si deseas retomar con el bot más tarde, inicia una nueva conversación."
-                    )
-            
             # Los saludos iniciales no necesitan memoria ni RAG
             if self.state == ConversationState.AWAITING_GREETING:
                 self.state = ConversationState.AWAITING_NAME_CITY
-                prompt = "Actúas como Xtalento Bot. Genera un saludo inicial cálido y profesional que comience exactamente con la palabra '¡Hola! 👋'. A continuación, preséntate brevemente y pide al usuario su nombre y la ciudad desde la que escribe."
+                prompt = "Actúas como Xtalento Bot. Genera un saludo inicial cálido y profesional que comience exactamente con la palabra '¡Hola! 👋'. A continuación, preséntate brevemente y pide al usuario su nombre y la ciudad desde la que escribe. IMPORTANTE: Solo habla de servicios y información que tienes conocimiento confirmado en tu base de datos."
                 response_text = self._generate_response(prompt)
                 self.chat_history.append(AIMessage(content=response_text))
                 return response_text
@@ -208,7 +197,7 @@ class Chatbot:
                 user_name = self._extract_name(user_input)
                 self.user_data['name'] = user_name
                 self.state = ConversationState.AWAITING_ROLE_INPUT
-                prompt = f"Actúas como Xtalento Bot. El usuario se llama {user_name}. Dale una bienvenida personalizada (sin usar la palabra 'Hola') y luego pregúntale sobre su cargo actual o al que aspira para poder darle una mejor asesoría."
+                prompt = f"Actúas como Xtalento Bot. El usuario se llama {user_name}. Dale una bienvenida personalizada (sin usar la palabra 'Hola') y luego pregúntale sobre su cargo actual o al que aspira para poder darle una mejor asesoría. IMPORTANTE: Solo habla de servicios que tienes conocimiento confirmado. Si no sabes algo específico, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.'"
                 response_text = self._generate_response(prompt)
                 self.chat_history.append(AIMessage(content=response_text))
                 return response_text
@@ -236,10 +225,13 @@ class Chatbot:
                 4. Estrategia de búsqueda de empleo
                 5. Simulación de entrevista con feedback
                 6. *Metodo X* (recomendado)
+                7. Test EPI (Evaluación de Personalidad Integral)
+                Puedes ver nuestros libros en https://xtalento.com.co
                 Nota: escribe "Metodo X" en negrilla. Si el canal lo soporta, muestra la palabra "recomendado" en color gris junto al nombre; si no es posible, déjalo como (recomendado).
                 Usa un emoji como 🚀 al final de la introducción.
                 sin usar la palabra Hola de nuevo, recuerda que el usuario ya te saludó.
                 Dile que puede elegir uno o varios servicios, marcando el número o diciendo el nombre del servicio.
+                IMPORTANTE: Solo presenta estos servicios que tienes en tu conocimiento confirmado. Si el usuario pregunta por servicios no listados, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.'
                 """
                 response_text = self._generate_response(prompt)
                 self.chat_history.append(AIMessage(content=response_text))
@@ -266,8 +258,9 @@ class Chatbot:
                 normalized_choice = (user_input or "").strip().lower()
                 if normalized_choice in {"metodo x", "método x", "metodo", "método", "6"}:
                     mx_prompt = (
-                        "Usa EXCLUSIVAMENTE el contexto. Brinda información clara pero corta en un maximo de 200 tokens sobre 'Metodo X' SIN INCLUIR precios: "
+                        "Usa EXCLUSIVAMENTE el contexto de tu conocimiento confirmado. Brinda información clara pero corta en un maximo de 200 tokens sobre 'Metodo X' SIN INCLUIR precios: "
                         "qué es, para quién aplica, beneficios, cómo funciona y resultados esperables. "
+                        "IMPORTANTE: Solo habla de información que tienes confirmada en tu base de conocimiento. Si no tienes conocimiento suficiente sobre algún aspecto del Método X, di 'Actualmente no tengo conocimiento completo sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.' "
                         "Cierra invitando a agendar una asesoría personalizada gratuita con un asesor para conocer por qué este paquete sería adecuado y el beneficio de comprarlo. recuerda que si el cliente dice que le interesa o quiere agendar una asesoria no le digas nada sobre pagos porque esta asesoria es gratuita"
                     )
                     mx_answer = self._safe_rag_answer(mx_prompt)
@@ -276,9 +269,14 @@ class Chatbot:
 
                 query = (
                     f"""
-                    Usa EXCLUSIVAMENTE el contexto para responder, excepto en la política de precios indicada abajo.
+                    Usa EXCLUSIVAMENTE el contexto de tu conocimiento confirmado para responder, excepto en la política de precios indicada abajo.
                     Servicios escogidos por el usuario: "{user_input}".
                     Nivel de cargo del usuario: "{self.user_data.get('role', 'táctico')}".
+
+                    🚨 POLÍTICA DE CONOCIMIENTO ESTRICTA:
+                    - SOLO proporciona información que tienes confirmada en tu base de conocimiento.
+                    - Si no tienes información completa sobre algún servicio solicitado, di: "Actualmente no tengo conocimiento completo sobre este servicio. Si quieres comunicarte con un humano, menciona la palabra 'agente' en el chat."
+                    - NO inventes detalles sobre servicios, tiempos o características.
 
                     Política de precios (aplica SIEMPRE, independientemente del rol):
                     - Para servicios relacionados con 'hoja de vida'/'HV'/'CV'/'currículum'/'ATS' (o el servicio 1): el precio es 50.000$.
@@ -289,9 +287,7 @@ class Chatbot:
                     Formato de salida (en español, claro y consistente). Sigue estos encabezados en este orden, en texto plano:
                     
                     Servicio o servicios escogidos: <lista breve de los servicios tal como aparecen en el contexto>
-
-                    informacion sobre el servicio o servicios: <qué incluye, cómo funciona y tiempos si están en contexto>
-
+                    informacion sobre el servicio o servicios: <qué incluye, cómo funciona y tiempos si están en contexto - SOLO si tienes la información confirmada>
                     precio del servicio o servicios: <aplica la política de precios arriba descrita para (1) Hoja de vida = 50.000$ y (2) Mejora de perfil = 80.000$; para el resto usa el contexto o indica si falta>
                     
                     - Paso 1: llenar el formulario {PAYMENT_FORM_URL} (indica que este paso es fundamental para poder seguir)
@@ -310,17 +306,18 @@ class Chatbot:
             elif self.state == ConversationState.PROVIDING_INFO:
                 # Detectar elección del usuario cuando no sabemos responder
                 text_l = (user_input or "").strip().lower()
-                if any(x in text_l for x in ["agente", "humano", "ventas", "persona", "asesor", "necesito un asesor", "quiero hablar con alguien", "hablar con una persona"]):
+                if "agente" in text_l:
                     self.state = ConversationState.PROVIDING_INFO
                     return (
-                        "Perfecto. Pauso este chat y un agente de ventas te contactará en este mismo canal. "
+                        "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal. "
                         "Si deseas retomar con el bot más tarde, inicia una nueva conversación."
                     )
 
                 # Opción de seguir con el bot y explorar servicios
                 if any(x in text_l for x in ["seguir", "continuar", "bot", "opciones", "servicios", "2", "dos"]):
                     guidance = (
-                        "presenta servicios disponibles de Xtalento (solo los que estén en el contexto del RAG) y guía a escoger uno; "
+                        "presenta SOLO servicios disponibles de Xtalento que tengas confirmados en tu conocimiento y guía a escoger uno; "
+                        "Si no tienes conocimiento completo sobre algún servicio, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.' "
                         "propón agendar una sesión virtual como siguiente paso, quiero que si el cliente dice que le interesa el metodo x  (solo con el metodo x) y quiere agendar una asesoria no le digas nada sobre pagos porque esta asesoria es gratuita"
                     )
                     response_text = self._continue_conversation(user_input, guidance)
@@ -334,7 +331,7 @@ class Chatbot:
 
         except Exception as e:
             print(f"\n[ERROR] Ha ocurrido un problema, continuo la conversación: {e}")
-            guidance = "hubo un inconveniente interno; responde de forma útil a lo último que dijo el usuario y mantén la conversación en marcha"
+            guidance = "hubo un inconveniente interno; responde de forma útil a lo último que dijo el usuario y mantén la conversación en marcha. IMPORTANTE: Solo habla de información que tienes conocimiento confirmado. Si no sabes algo específico, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.'"
             return self._continue_conversation(str(user_input), guidance)
 
 

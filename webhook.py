@@ -183,7 +183,7 @@ def handle_message_async(sender_number: str, text_in: str) -> None:
             block_user(sender_number)
             
     except Exception as e:
-        reply_text = "Lo siento, tuve un problema procesando tu mensaje."
+        reply_text = "Lo siento, tuve un problema procesando tu mensaje. Si quieres comunicarte con un humano, menciona la palabra 'agente' en el chat."
         print("[BOT] ERROR (bg):", e)
     
     status, body = send_whatsapp_text(sender_number, reply_text)
@@ -195,7 +195,7 @@ def handle_message_async_with_remote(sender_number: str, text_in: str, remote_ji
         user_bot = get_user_bot(sender_number)
         reply_text = user_bot.process_message(text_in) or "🤖"
     except Exception as e:
-        reply_text = "Lo siento, tuve un problema procesando tu mensaje."
+        reply_text = "Lo siento, tuve un problema procesando tu mensaje. Si quieres comunicarte con un humano, menciona la palabra 'agente' en el chat."
         print("[BOT] ERROR (bg):", e)
     status, body = send_whatsapp_text(sender_number, reply_text, remote_jid=remote_jid)
     print(f"[SEND (bg)] -> {sender_number} [{status}] {body}")
