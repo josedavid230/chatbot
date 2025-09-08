@@ -178,7 +178,7 @@ def handle_message_async(sender_number: str, text_in: str) -> None:
         reply_text = user_bot.process_message(text_in) or "🤖"
         
         # Detectar si el bot activó el modo agente humano
-        if "Perfecto. Pauso este chat" in reply_text:
+        if "Perfecto. Te conecto con un agente humano inmediatamente" in reply_text:
             print(f"[AGENT MODE] Bloqueando usuario {sender_number} por {BLOCK_DURATION_HOURS} horas")
             block_user(sender_number)
             

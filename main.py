@@ -171,6 +171,14 @@ class Chatbot:
 
     def process_message(self, user_input):
         try:
+            # PRIORIDAD MÁXIMA: Detectar solicitud de agente humano ANTES de cualquier procesamiento
+            if user_input and "agente" in user_input.lower():
+                # Agregar el mensaje del usuario al historial antes de responder
+                self.chat_history.append(HumanMessage(content=user_input))
+                response = "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal."
+                self.chat_history.append(AIMessage(content=response))
+                return response
+            
             # Los saludos iniciales no necesitan memoria ni RAG
             if self.state == ConversationState.AWAITING_GREETING:
                 self.state = ConversationState.AWAITING_NAME_CITY
@@ -304,16 +312,8 @@ class Chatbot:
                 return answer
                 
             elif self.state == ConversationState.PROVIDING_INFO:
-                # Detectar elección del usuario cuando no sabemos responder
-                text_l = (user_input or "").strip().lower()
-                if "agente" in text_l:
-                    self.state = ConversationState.PROVIDING_INFO
-                    return (
-                        "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal. "
-                        "Si deseas retomar con el bot más tarde, inicia una nueva conversación."
-                    )
-
                 # Opción de seguir con el bot y explorar servicios
+                text_l = (user_input or "").strip().lower()
                 if any(x in text_l for x in ["seguir", "continuar", "bot", "opciones", "servicios", "2", "dos"]):
                     guidance = (
                         "presenta SOLO servicios disponibles de Xtalento que tengas confirmados en tu conocimiento y guía a escoger uno; "
