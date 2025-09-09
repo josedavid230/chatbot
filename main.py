@@ -30,6 +30,7 @@ class ConversationState:
     AWAITING_NAME_CITY = "AWAITING_NAME_CITY"
     AWAITING_ROLE_INPUT = "AWAITING_ROLE_INPUT"
     AWAITING_SERVICE_CHOICE = "AWAITING_SERVICE_CHOICE"
+    AWAITING_CONTINUE_CHOICE = "AWAITING_CONTINUE_CHOICE"
     PROVIDING_INFO = "PROVIDING_INFO"
 
 # --- Lógica del Chatbot ---
@@ -163,10 +164,31 @@ class Chatbot:
         return (
             "No se detectó una respuesta válida. "
             "¿Qué prefieres?\n\n"
-            "1) Te puedo remitir con un agente de ventas\n"
-            "2) Puedes seguir haciéndome preguntas\n\n"
+            "1) Te remito con un agente de ventas humano\n"
+            "2) Seguir hablando conmigo\n\n"
             "Si quieres hablar con un agente, escribe 'agente'."
         )
+    
+    def _handle_continue_choice(self, user_input: str) -> str:
+        """Maneja la respuesta del usuario después de _continue_conversation."""
+        text_lower = user_input.lower().strip()
+        
+        # Opción 1: Quiere agente humano
+        if any(x in text_lower for x in ["1", "uno", "agente", "humano", "ventas"]):
+            return "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal."
+        
+        # Opción 2: Quiere seguir hablando
+        elif any(x in text_lower for x in ["2", "dos", "seguir", "continuar", "hablar", "preguntas"]):
+            return "Perfecto, sigamos hablando. ¿Qué preguntas tienes sobre nuestros servicios de potenciación laboral?"
+        
+        # Si no detecta ninguna opción clara
+        else:
+            return (
+                "No entendí tu respuesta. Por favor elige:\n\n"
+                "Escribe '1' para hablar con un agente humano\n"
+                "Escribe '2' si quieres seguir hablando conmigo\n"
+                "O escribe 'agente' para conectarte directamente."
+            )
 
     def process_message(self, user_input):
         try:
@@ -213,7 +235,7 @@ class Chatbot:
                 role_classification = self._classify_role(user_input)
                 if not role_classification:
                     print(f"[DEBUG] No se pudo clasificar el rol. Continuando la conversación sin error.")
-                    self.state = ConversationState.AWAITING_SERVICE_CHOICE
+                    self.state = ConversationState.AWAITING_CONTINUE_CHOICE
                     response_text = self._continue_conversation(user_input, "")
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
@@ -241,11 +263,12 @@ class Chatbot:
                 return response_text
 
             elif self.state == ConversationState.AWAITING_SERVICE_CHOICE:
-                service_keywords = ['hoja de vida', 'ats', 'perfil', 'plataforma', 'entrevista', 'estrategia', 'búsqueda', '1', '2', '3', '4', '5', '6', 'mejora','mejorar','preparación', 'metodo x', 'método x']
+                service_keywords = ['hoja de vida', 'ats', 'perfil', 'plataforma', 'entrevista', 'estrategia', 'búsqueda', 'test','Test','EPI','epi','evaluación', '1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x']
                 is_service_choice = any(keyword in user_input.lower() for keyword in service_keywords)
 
                 if not is_service_choice:
                     print(f"[DEBUG] No se detectó una selección de servicio. Continuando sin interrumpir.")
+                    self.state = ConversationState.AWAITING_CONTINUE_CHOICE
                     response_text = self._continue_conversation(user_input, "")
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
@@ -301,6 +324,21 @@ class Chatbot:
                 answer = self._safe_rag_answer(query)
                 self.chat_history.append(AIMessage(content=answer))
                 return answer
+            
+            elif self.state == ConversationState.AWAITING_CONTINUE_CHOICE:
+                response_text = self._handle_continue_choice(user_input)
+                self.chat_history.append(AIMessage(content=response_text))
+                
+                # Si el usuario eligió agente, mantener el estado para que el webhook detecte el bloqueo
+                if "Te conecto con un agente humano" in response_text:
+                    return response_text
+                # Si eligió seguir hablando, cambiar a estado de información
+                elif "¿Qué preguntas tienes" in response_text:
+                    self.state = ConversationState.PROVIDING_INFO
+                    return response_text
+                # Si no entendió, mantener el mismo estado para volver a preguntar
+                else:
+                    return response_text
                 
             elif self.state == ConversationState.PROVIDING_INFO:
                 # Opción de seguir con el bot y explorar servicios
