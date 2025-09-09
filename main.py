@@ -23,6 +23,7 @@ CHUNK_SIZE = 800
 CHUNK_OVERLAP = 80
 OPENAI_MODEL = "gpt-4o-mini"
 PAYMENT_FORM_URL = "https://forms.gle/vBDAguF19cSaDhAK6"
+CALENDAR_LINK = "https://n9.cl/fa5tz3"
 
 # --- Estados de Conversación ---
 class ConversationState:
@@ -169,6 +170,26 @@ class Chatbot:
             "Si quieres hablar con un agente, escribe 'agente'."
         )
     
+    def _detect_scheduling_request(self, user_input: str) -> bool:
+        """Detecta si el usuario quiere agendar una cita o sesión."""
+        scheduling_keywords = [
+            'agendar', 'agenda', 'agendo', 'sesión', 'sesion', 'cita', 'reunión', 'reunion',
+            'calendario', 'hora', 'horario', 'cuando', 'cuándo', 'disponible', 'disponibilidad',
+            'programar', 'programa', 'appointment', 'meeting', 'schedule', 'virtual',
+            'asesoría', 'asesoria', 'consulta', 'mentoria', 'mentoría'
+        ]
+        text_lower = user_input.lower().strip()
+        return any(keyword in text_lower for keyword in scheduling_keywords)
+    
+    def _provide_calendar_link(self) -> str:
+        """Proporciona el enlace del calendario para agendar citas."""
+        return (
+            f"¡Perfecto! Para agendar tu sesión personalizada, entra a nuestro calendario online:\n\n"
+            f"🗓️ {CALENDAR_LINK}\n\n"
+            f"Ahí puedes elegir el día y horario que mejor te convenga. "
+            f"¡Te esperamos!"
+        )
+
     def _handle_continue_choice(self, user_input: str) -> str:
         """Maneja la respuesta del usuario después de _continue_conversation."""
         text_lower = user_input.lower().strip()
@@ -197,6 +218,14 @@ class Chatbot:
                 # Agregar el mensaje del usuario al historial antes de responder
                 self.chat_history.append(HumanMessage(content=user_input))
                 response = "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal."
+                self.chat_history.append(AIMessage(content=response))
+                return response
+            
+            # SEGUNDA PRIORIDAD: Detectar solicitudes de agendamiento
+            if user_input and self._detect_scheduling_request(user_input):
+                # Agregar el mensaje del usuario al historial antes de responder
+                self.chat_history.append(HumanMessage(content=user_input))
+                response = self._provide_calendar_link()
                 self.chat_history.append(AIMessage(content=response))
                 return response
             
@@ -263,7 +292,7 @@ class Chatbot:
                 return response_text
 
             elif self.state == ConversationState.AWAITING_SERVICE_CHOICE:
-                service_keywords = ['hoja de vida', 'ats', 'perfil', 'plataforma', 'entrevista', 'estrategia', 'búsqueda', 'test','Test','EPI','epi','evaluación', '1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x']
+                service_keywords = ['hoja de vida','Hoja', 'Hoja de vida', 'Optimización', 'Optimización de Hoja de vida', 'ats','Optimización de Hoja de vida (ATS)','Mejora de perfil en plataformas de empleo','Preparación para Entrevistas','Preparacion para Entrevistas','Estrategia de búsqueda de empleo','Estrategia de busqueda de empleo','Simulación de entrevista con feedback','Simulacion de entrevista con feedback','Metodo X','Test EPI','Evaluación de Personalidad Integral','1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x']
                 is_service_choice = any(keyword in user_input.lower() for keyword in service_keywords)
 
                 if not is_service_choice:
@@ -283,7 +312,7 @@ class Chatbot:
                         "Usa EXCLUSIVAMENTE el contexto de tu conocimiento confirmado. Brinda información clara pero corta en un maximo de 200 tokens sobre 'Metodo X' SIN INCLUIR precios: "
                         "qué es, para quién aplica, beneficios, cómo funciona y resultados esperables. "
                         "IMPORTANTE: Solo habla de información que tienes confirmada en tu base de conocimiento. Si no tienes conocimiento suficiente sobre algún aspecto del Método X, di 'Actualmente no tengo conocimiento completo sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.' "
-                        "Cierra invitando a agendar una asesoría personalizada gratuita con un asesor para conocer por qué este paquete sería adecuado y el beneficio de comprarlo. recuerda que si el cliente dice que le interesa o quiere agendar una asesoria no le digas nada sobre pagos porque esta asesoria es gratuita"
+                        f"Cierra invitando a agendar una asesoría personalizada gratuita. Incluye este enlace para agendar: {CALENDAR_LINK}. Recuerda que si el cliente dice que le interesa o quiere agendar una asesoria no le digas nada sobre pagos porque esta asesoria es gratuita"
                     )
                     mx_answer = self._safe_rag_answer(mx_prompt)
                     self.chat_history.append(AIMessage(content=mx_answer))
