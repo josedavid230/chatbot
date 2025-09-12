@@ -41,7 +41,7 @@ class Chatbot:
         self.user_data = {}
         self.user_data['name'] = "" # Se inicializa el nombre del usuario
         self.chat_history = []
-        self.llm = ChatOpenAI(model_name=OPENAI_MODEL, max_tokens=400, temperature=0.2)
+        self.llm = ChatOpenAI(model_name=OPENAI_MODEL, max_tokens=500, temperature=0.1)
         
         system_prompt = """
         Actuás como Xtalento Bot, un asistente profesional cálido, claro y experto que guía a personas a potenciar su perfil laboral y encontrar empleo más rápido.
@@ -101,20 +101,90 @@ class Chatbot:
 
         self.rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
-    def _classify_role(self, role_description):
-        """Usa el LLM para clasificar un rol en operativo, táctico o estratégico."""
-        classification_prompt_text = f"""
-        Clasifica el siguiente cargo únicamente como 'operativo', 'táctico' o 'estratégico'. No agregues ninguna otra palabra o explicación.
-        IMPORTANTE: Solo clasifica si tienes conocimiento suficiente sobre el cargo. Si no puedes clasificar con certeza, responde 'no_clasificable'.
-        Cargo: "{role_description}"
-        Clasificación:
+    def _extract_role_from_text(self, text):
+        """Extrae el cargo o rol laboral de un texto complejo."""
+        extraction_prompt = f"""
+        Analiza el siguiente texto y extrae ÚNICAMENTE el cargo o rol laboral mencionado. 
+
+        Ejemplos:
+        - "Estoy desempleado antes era analista de datos" → "analista de datos"
+        - "Soy gerente de ventas en una empresa" → "gerente de ventas"
+        - "Trabajo como desarrollador frontend" → "desarrollador frontend"
+        - "Fui coordinador de proyectos" → "coordinador de proyectos"
+        - "Me desempeño como CEO" → "CEO"
+        - "Quiero trabajar de marketing" → "marketing"
+
+        IMPORTANTE: 
+        - Extrae solo el cargo/rol, sin contexto adicional
+        - Si hay múltiples cargos, extrae el más relevante o reciente
+        - Si no hay un cargo claro, responde 'no_identificable'
+        - No agregues explicaciones
+
+        Texto: "{text}"
+        Cargo extraído:
         """
+        response = self.llm.invoke(extraction_prompt)
+        extracted_role = response.content.strip()
+        
+        if extracted_role.lower() in ['no_identificable', 'no identificable', '']:
+            return None
+        return extracted_role
+
+    def _classify_role(self, role_description):
+        """Usa el LLM para extraer y clasificar un rol de texto complejo en operativo, táctico o estratégico."""
+        # Paso 1: Extraer el cargo del texto complejo
+        extracted_role = self._extract_role_from_text(role_description)
+        
+        if not extracted_role:
+            print(f"[DEBUG] No se pudo extraer un cargo del texto: {role_description}")
+            return None
+            
+        print(f"[DEBUG] Cargo extraído: '{extracted_role}' del texto: '{role_description}'")
+        
+        # Paso 2: Clasificar el cargo extraído
+        classification_prompt_text = f"""
+        Clasifica el siguiente cargo laboral en UNO de estos tres niveles jerárquicos.
+        Responde ÚNICAMENTE con la palabra: operativo, táctico o estratégico.
+
+        NIVELES JERÁRQUICOS:
+
+        OPERATIVO: Cargos de ejecución directa y técnicos
+        - Analistas, desarrolladores, asistentes, operarios, técnicos
+        - Especialistas junior, consultores junior
+        - Ejecutivos de cuenta, vendedores
+
+        TÁCTICO: Cargos de supervisión y coordinación media
+        - Coordinadores, especialistas senior, jefes de área
+        - Supervisores, team leads, líderes de equipo
+        - Gerentes de área específica
+
+        ESTRATÉGICO: Cargos de alta dirección y toma de decisiones
+        - CEO, presidente, vicepresidente, director general
+        - Directores de área, gerentes generales
+        - VP (vicepresidente), fundadores
+
+        Cargo a clasificar: "{extracted_role}"
+
+        Respuesta (solo la palabra):"""
         response = self.llm.invoke(classification_prompt_text)
         # Aseguramos que la respuesta sea una de las tres opciones válidas
-        classification = response.content.strip().lower()
-        if classification in ['operativo', 'táctico', 'estratégico']:
-            return classification
-        return None # Devolvemos None si la clasificación falla
+        classification_raw = response.content.strip().lower()
+        
+        print(f"[DEBUG] Clasificación raw obtenida: '{classification_raw}' para cargo: '{extracted_role}'")
+        
+        # Extraer la clasificación real del texto (por si el LLM agrega palabras extra)
+        if 'operativo' in classification_raw:
+            classification = 'operativo'
+        elif 'táctico' in classification_raw or 'tactico' in classification_raw:
+            classification = 'táctico'
+        elif 'estratégico' in classification_raw or 'estrategico' in classification_raw:
+            classification = 'estratégico'
+        else:
+            print(f"[DEBUG] No se pudo extraer clasificación válida de: '{classification_raw}'")
+            return None
+        
+        print(f"[DEBUG] Clasificación final: '{classification}' para cargo: '{extracted_role}'")
+        return classification
 
     def _extract_name(self, name_city_text):
         """Usa el LLM para extraer el nombre de pila del usuario de un texto."""
@@ -214,7 +284,9 @@ class Chatbot:
     def process_message(self, user_input):
         try:
             # PRIORIDAD MÁXIMA: Detectar solicitud de agente humano ANTES de cualquier procesamiento
-            if user_input and "agente" in user_input.lower():
+            # EXCEPCIÓN: No detectar "agente" cuando el usuario está describiendo su cargo laboral
+            if (user_input and "agente" in user_input.lower() and 
+                self.state != ConversationState.AWAITING_ROLE_INPUT):
                 # Agregar el mensaje del usuario al historial antes de responder
                 self.chat_history.append(HumanMessage(content=user_input))
                 response = "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal."
@@ -273,18 +345,28 @@ class Chatbot:
                 self.state = ConversationState.AWAITING_SERVICE_CHOICE
                 prompt = f"""
                 Actúas como Xtalento Bot. Presenta los siguientes servicios en una lista numerada sin mencionar ni revelar la categoría/nivel del usuario:
-                1. Optimización de Hoja de Vida (ATS)
-                2. Mejora de perfil en plataformas de empleo
-                3. Preparación para Entrevistas
-                4. Estrategia de búsqueda de empleo
-                5. Simulación de entrevista con feedback
-                6. *Metodo X* (recomendado)
-                7. Test EPI (Evaluación de Personalidad Integral)
-                Puedes ver nuestros libros en https://xtalento.com.co
+                Gracias por tu interés en Xtalento. Te contamos que ayudamos a personas como tú a potenciar su perfil profesional y conseguir trabajo más rápido.
+
+                Nuestros servicios son:
+
+                1. Optimización de hoja de vida)(formato ATS): Adaptamos tu HV para que supere filtros digitales y capte la atención de los reclutadores.
+
+                2. Mejora de perfil en plataformas de empleo (LinkedIn, Magneto, Computrabajo, El Empleo)): Potenciamos tu perfil para que se vea profesional, tenga mayor visibilidad y atraiga más oportunidades.
+
+                3. Preparación y simulación de entrevistas laborales: Te entrenamos con preguntas reales, retroalimentación y técnicas para responder con seguridad y generar impacto.
+
+                4. Estrategia personalizada de búsqueda de empleo): Creamos un plan contigo para que busques trabajo de forma más efectiva, enfocada y con objetivos claros.
+
+                5. Metodo X (recomendado): Programa 1:1 de 5 sesiones para diagnosticar tu perfil, optimizar CV/LinkedIn, entrenarte en liderazgo y entrevistas, y cerrar con un plan de acción sostenible para ascender o moverte con estrategia.
+
+                6. Test EPI (Evaluación de Personalidad Integral): Aplicamos el Test EPI (Evaluación de Personalidad Integral), una herramienta diseñada para conocerte en profundidad y descubrir tu potencial personal y profesional.
+
+                tambien recuerdale que puede ver nuestros libros en https://xtalento.com.co
+
                 Nota: escribe "Metodo X" en negrilla. Si el canal lo soporta, muestra la palabra "recomendado" en color gris junto al nombre; si no es posible, déjalo como (recomendado).
                 Usa un emoji como 🚀 al final de la introducción.
                 sin usar la palabra Hola de nuevo, recuerda que el usuario ya te saludó.
-                Dile que puede elegir uno o varios servicios, marcando el número o diciendo el nombre del servicio.
+                Dile que puede elegir uno o varios servicios, marcando el número del servicio y que si quiere escoger todos marque en el char la palabara Todos
                 IMPORTANTE: Solo presenta estos servicios que tienes en tu conocimiento confirmado. Si el usuario pregunta por servicios no listados, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.'
                 """
                 response_text = self._generate_response(prompt)
@@ -292,7 +374,7 @@ class Chatbot:
                 return response_text
 
             elif self.state == ConversationState.AWAITING_SERVICE_CHOICE:
-                service_keywords = ['hoja de vida','Hoja', 'Hoja de vida', 'Optimización', 'Optimización de Hoja de vida', 'ats','Optimización de Hoja de vida (ATS)','Mejora de perfil en plataformas de empleo','Preparación para Entrevistas','Preparacion para Entrevistas','Estrategia de búsqueda de empleo','Estrategia de busqueda de empleo','Simulación de entrevista con feedback','Simulacion de entrevista con feedback','Metodo X','Test EPI','Evaluación de Personalidad Integral','1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x']
+                service_keywords = ['hoja de vida','Hoja', 'Hoja de vida', 'Optimización', 'Optimización de Hoja de vida', 'ats','Optimización de Hoja de vida (ATS)','Mejora de perfil en plataformas de empleo','Preparación para Entrevistas','Preparacion para Entrevistas','Estrategia de búsqueda de empleo','Estrategia de busqueda de empleo','Simulación de entrevista con feedback','Simulacion de entrevista con feedback','Metodo X','Test EPI','Evaluación de Personalidad Integral','1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x'  ]
                 is_service_choice = any(keyword in user_input.lower() for keyword in service_keywords)
 
                 if not is_service_choice:
@@ -305,9 +387,19 @@ class Chatbot:
                 self.user_data['service'] = user_input
                 self.state = ConversationState.PROVIDING_INFO
                 
-                # Si el usuario selecciona explícitamente Metodo X, responder sin precios antes de construir el query general
+                # Si el usuario elige TODOS los servicios, ofrecer diagnóstico gratuito
                 normalized_choice = (user_input or "").strip().lower()
-                if normalized_choice in {"metodo x", "método x", "metodo", "método", "6"}:
+                if normalized_choice in {"Todos", "Todos los servicios", "Lista completa", "Opciones disponibles"}:
+                    response_text = (
+                        "¡Nos encantaría conocerte y trabajar contigo! 🎉\n\n"
+                        "Te ofrecemos un diagnóstico virtual gratuito para revisar tu perfil y a partir de este diagnóstico generar junto contigo una Estrategia Laboral Personalizada.\n\n"
+                        "Marca 'agenda' en el chat para que escojas tu horario disponible ⏰"
+                    )
+                    self.chat_history.append(AIMessage(content=response_text))
+                    return response_text
+                
+                # Si el usuario selecciona explícitamente Metodo X, responder sin precios antes de construir el query general
+                elif normalized_choice in {"metodo x", "método x", "metodo", "método", "6"}:
                     mx_prompt = (
                         "Usa EXCLUSIVAMENTE el contexto de tu conocimiento confirmado. Brinda información clara pero corta en un maximo de 200 tokens sobre 'Metodo X' SIN INCLUIR precios: "
                         "qué es, para quién aplica, beneficios, cómo funciona y resultados esperables. "
@@ -370,9 +462,44 @@ class Chatbot:
                     return response_text
                 
             elif self.state == ConversationState.PROVIDING_INFO:
-                # Opción de seguir con el bot y explorar servicios
+                # PRIORIDAD: Detectar confirmación de pasos 1 y 3 para enviar calendario
+                payment_status = self._detect_payment_confirmation(user_input)
+                if payment_status['both_confirmed']:
+                    response_text = self._send_calendar_for_confirmed_payment()
+                    self.chat_history.append(AIMessage(content=response_text))
+                    return response_text
+                
+                # Detectar confirmación individual de pasos para dar retroalimentación
+                elif payment_status['paso1'] and not payment_status['paso3']:
+                    response_text = (
+                        "¡Perfecto! ✅ Has completado el formulario (paso 1).\n\n"
+                        "Ahora solo falta confirmar el pago (paso 3) para poder agendar tu sesión virtual.\n\n"
+                        "Una vez realices el pago, confírmalo aquí para enviarte el link del calendario. 😊"
+                    )
+                    self.chat_history.append(AIMessage(content=response_text))
+                    return response_text
+                
+                elif payment_status['paso3'] and not payment_status['paso1']:
+                    response_text = (
+                        "¡Excelente! ✅ Has confirmado el pago (paso 3).\n\n"
+                        "Ahora solo falta completar el formulario (paso 1) para poder agendar tu sesión virtual.\n\n"
+                        "Una vez llenes el formulario, confírmalo aquí para enviarte el link del calendario. 😊"
+                    )
+                    self.chat_history.append(AIMessage(content=response_text))
+                    return response_text
+                
+                # Opción específica SOLO para cuando el usuario explícitamente quiere ver la lista completa
                 text_l = (user_input or "").strip().lower()
-                if any(x in text_l for x in ["seguir", "continuar", "bot", "opciones", "servicios", "2", "dos"]):
+                
+                # Frases más específicas que realmente indican que quiere ver todos los servicios
+                show_services_phrases = [
+                    "mostrar servicios", "ver servicios", "lista de servicios", "todos los servicios",
+                    "que servicios tienen", "cuales servicios", "opciones disponibles", 
+                    "mostrar opciones", "ver opciones", "lista completa"
+                ]
+                
+                # Solo activar la plantilla si es muy específico
+                if any(phrase in text_l for phrase in show_services_phrases):
                     response_text = (
                         "Perfecto, sigamos. Te recuerdo nuestros servicios disponibles:\n\n"
                         "1. Optimización de Hoja de Vida (ATS)\n"
@@ -387,6 +514,12 @@ class Chatbot:
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
 
+                # Si menciona temas de pago/formulario pero no confirma claramente, pedir clarificación
+                if self._is_payment_related_query(user_input):
+                    response_text = self._send_step_clarification_message()
+                    self.chat_history.append(AIMessage(content=response_text))
+                    return response_text
+
                 # Responder vía RAG; si RAG no sabe, devolver opciones 1/2
                 answer = self._safe_rag_answer(user_input)
                 self.chat_history.append(AIMessage(content=answer))
@@ -396,6 +529,71 @@ class Chatbot:
             print(f"\n[ERROR] Ha ocurrido un problema, continuo la conversación: {e}")
             guidance = "hubo un inconveniente interno; responde de forma útil a lo último que dijo el usuario y mantén la conversación en marcha. IMPORTANTE: Solo habla de información que tienes conocimiento confirmado. Si no sabes algo específico, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.'"
             return self._continue_conversation(str(user_input), guidance)
+
+    def _detect_payment_confirmation(self, user_input: str) -> dict:
+        """Detecta si el usuario confirma el paso 1 (formulario) y/o paso 3 (pago)."""
+        text_lower = user_input.lower().strip()
+        
+        # Palabras clave para confirmar paso 1 (formulario)
+        paso1_keywords = [
+            'Completé el formulario', 'Llené el formulario', 'Formulario listo', 
+            'Formulario completo', 'Ya llené', 'Ya completé', 'Paso 1 listo',
+            'Paso uno listo', 'Formulario enviado', 'Envié el formulario', 'Listo paso uno',
+            'Listo paso 1', 'Confirmo paso 1', 'Confirmo paso uno'
+        ]
+        
+        # Palabras clave para confirmar paso 3 (pago)
+        paso3_keywords = [
+            'Realicé el pago', 'Hice el pago', 'Pago realizado', 'Pago listo',
+            'Ya pagué', 'Pagué', 'Transferencia realizada', 'Paso 3 listo',
+            'Paso tres listo', 'Pago confirmado', 'Envié el pago'
+        ]
+        
+        # Detectar confirmaciones
+        paso1_confirmed = any(keyword in text_lower for keyword in paso1_keywords)
+        paso3_confirmed = any(keyword in text_lower for keyword in paso3_keywords)
+        
+        return {
+            'paso1': paso1_confirmed,
+            'paso3': paso3_confirmed,
+            'both_confirmed': paso1_confirmed and paso3_confirmed
+        }
+    
+    def _send_calendar_for_confirmed_payment(self) -> str:
+        """Envía el link del calendario cuando se confirman ambos pasos."""
+        return (
+            f"¡Excelente! ✅ Has completado tanto el formulario como el pago.\n\n"
+            f"Ahora puedes agendar tu sesión virtual de 60 minutos directamente en nuestro calendario:\n\n"
+            f"🗓️ {CALENDAR_LINK}\n\n"
+            f"Elige el día y horario que mejor te convenga. Una vez agendado, recibirás los detalles de confirmación.\n\n"
+            f"¡Estamos listos para acompañarte en este proceso! 😊"
+        )
+    
+    def _is_payment_related_query(self, user_input: str) -> bool:
+        """Detecta si el usuario está haciendo una consulta relacionada con pagos/pasos pero no confirmando."""
+        text_lower = user_input.lower().strip()
+        
+        # Palabras que indican que está preguntando sobre los pasos pero no confirmando
+        query_keywords = [
+            'formulario', 'pago', 'paso', 'transferencia', 'banco', 'cuenta',
+            'cómo pago', 'donde pago', 'cuánto cuesta', 'precio', 'valor',
+            'información', 'datos', 'llenar', 'completar', 'enviar'
+        ]
+        
+        return any(keyword in text_lower for keyword in query_keywords)
+    
+    def _send_step_clarification_message(self) -> str:
+        """Mensaje para clarificar los pasos cuando el usuario no confirma claramente."""
+        return (
+            "Para continuar con tu proceso, necesito que confirmes los pasos completados:\n\n"
+            "📋 **Paso 1:** Llenar formulario\n"
+            "💳 **Paso 3:** Realizar pago\n\n"
+            "Por favor confirma cuáles has completado, ejemplo:\n"
+            "• 'Completé el formulario'\n"
+            "• 'Realicé el pago'\n"
+            "• 'Completé formulario y pago'\n\n"
+            "Si necesitas ayuda personalizada, escribe **'agente'** para comunicarte con un agente de ventas. 👥"
+        )
 
 
 # --- Funciones de Soporte ---
