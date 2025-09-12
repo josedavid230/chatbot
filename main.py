@@ -349,19 +349,15 @@ class Chatbot:
 
                 Nuestros servicios son:
 
-                1. Optimización de hoja de vida)(formato ATS): Adaptamos tu HV para que supere filtros digitales y capte la atención de los reclutadores.
+                1. *Optimización de hoja de vida)(formato ATS)*: Adaptamos tu HV para que supere filtros digitales y capte la atención de los reclutadores.
+                2. *Mejora de perfil en plataformas de empleo*: Potenciamos tu perfil para que se vea profesional, tenga mayor visibilidad y atraiga más oportunidades.
+                3. *Preparación de entrevistas laborales*: Te entrenamos con preguntas reales, retroalimentación y técnicas para responder con seguridad y generar impacto.
+                4. *Estrategia personalizada de búsqueda de empleo)*: Creamos un plan contigo para que busques trabajo de forma más efectiva, enfocada y con objetivos claros.
+                5. *Simulación de entrevistas laborales con feedback*: Simulación de entrevistas reales, recomendaciones personalizadas y retroalimentación para que te prepares mejor para la entrevista.
+                6. *Metodo X (recomendado)*: Programa 1:1 de 5 sesiones para diagnosticar tu perfil, optimizar CV/LinkedIn, entrenarte en liderazgo y entrevistas, y cerrar con un plan de acción sostenible para ascender o moverte con estrategia.
+                7. *Test EPI (Evaluación de Personalidad Integral)*: Aplicamos el Test EPI (Evaluación de Personalidad Integral), una herramienta diseñada para conocerte en profundidad y descubrir tu potencial personal y profesional.
 
-                2. Mejora de perfil en plataformas de empleo (LinkedIn, Magneto, Computrabajo, El Empleo)): Potenciamos tu perfil para que se vea profesional, tenga mayor visibilidad y atraiga más oportunidades.
-
-                3. Preparación y simulación de entrevistas laborales: Te entrenamos con preguntas reales, retroalimentación y técnicas para responder con seguridad y generar impacto.
-
-                4. Estrategia personalizada de búsqueda de empleo): Creamos un plan contigo para que busques trabajo de forma más efectiva, enfocada y con objetivos claros.
-
-                5. Metodo X (recomendado): Programa 1:1 de 5 sesiones para diagnosticar tu perfil, optimizar CV/LinkedIn, entrenarte en liderazgo y entrevistas, y cerrar con un plan de acción sostenible para ascender o moverte con estrategia.
-
-                6. Test EPI (Evaluación de Personalidad Integral): Aplicamos el Test EPI (Evaluación de Personalidad Integral), una herramienta diseñada para conocerte en profundidad y descubrir tu potencial personal y profesional.
-
-                tambien recuerdale que puede ver nuestros libros en https://xtalento.com.co
+                Libros y recursos en: https://xtalento.com.co
 
                 Nota: escribe "Metodo X" en negrilla. Si el canal lo soporta, muestra la palabra "recomendado" en color gris junto al nombre; si no es posible, déjalo como (recomendado).
                 Usa un emoji como 🚀 al final de la introducción.
@@ -410,28 +406,43 @@ class Chatbot:
                     self.chat_history.append(AIMessage(content=mx_answer))
                     return mx_answer
 
+                user_role = self.user_data.get('role', 'táctico')
+                
                 query = (
                     f"""
                     Usa EXCLUSIVAMENTE el contexto de tu conocimiento confirmado para responder, excepto en la política de precios indicada abajo.
                     Servicios escogidos por el usuario: "{user_input}".
-                    Nivel de cargo del usuario: "{self.user_data.get('role', 'táctico')}".
 
                     🚨 POLÍTICA DE CONOCIMIENTO ESTRICTA:
                     - SOLO proporciona información que tienes confirmada en tu base de conocimiento.
                     - Si no tienes información completa sobre algún servicio solicitado, di: "Actualmente no tengo conocimiento completo sobre este servicio. Si quieres comunicarte con un humano, menciona la palabra 'agente' en el chat."
                     - NO inventes detalles sobre servicios, tiempos o características.
+                    - NUNCA reveles o menciones la clasificación de nivel del usuario.
 
-                    Política de precios (aplica SIEMPRE, independientemente del rol):
-                    - Para servicios relacionados con 'hoja de vida'/'HV'/'CV'/'currículum'/'ATS' (o el servicio 1): el precio es 50.000$.
-                    - Para 'Mejora de perfil en plataformas de empleo' (o el servicio 2): el precio es 80.000$.
-                    - Si el contexto muestra otros precios para esos dos servicios, IGNÓRALOS y aplica esta política.
+                    📊 POLÍTICA DE PRECIOS POR NIVEL JERÁRQUICO:
+                    
+                    Para el nivel OPERATIVO (cargos de ejecución directa y técnicos: analistas, desarrolladores, asistentes, operarios, técnicos, especialistas junior, consultores junior, ejecutivos de cuenta, vendedores):
+                    - Hoja de vida/CV/ATS: 50.000$ (precio fijo)
+                    - Mejora de perfil en plataformas: 80.000$ (precio fijo)  
+                    - Para otros servicios: busca en tu base de conocimiento los precios específicos para nivel operativo
+                    
+                    Para el nivel TÁCTICO (cargos de supervisión y coordinación media: coordinadores, especialistas senior, jefes de área, supervisors, team leads, líderes de equipo, gerentes de área específica):
+                    - Hoja de vida/CV/ATS: 50.000$ (precio fijo)
+                    - Mejora de perfil en plataformas: 80.000$ (precio fijo)
+                    - Para otros servicios: busca en tu base de conocimiento los precios específicos para nivel táctico
+                    
+                    Para el nivel ESTRATÉGICO (cargos de alta dirección y toma de decisiones: CEO, presidente, vicepresidente, director general, directores de área, gerentes generales, VP, fundadores):
+                    - Hoja de vida/CV/ATS: 50.000$ (precio fijo)
+                    - Mejora de perfil en plataformas: 80.000$ (precio fijo)
+                    - Para otros servicios: busca en tu base de conocimiento los precios específicos para nivel estratégico
+                    
+                    El usuario está clasificado como nivel {user_role.upper()}. Busca los precios correspondientes a este nivel en tu base de conocimiento, excepto para los dos servicios con precio fijo mencionados arriba.
 
-                  
                     Formato de salida (en español, claro y consistente). Sigue estos encabezados en este orden, en texto plano:
                     
                     Servicio o servicios escogidos: <lista breve de los servicios tal como aparecen en el contexto>
-                    informacion sobre el servicio o servicios: <qué incluye, cómo funciona y tiempos si están en contexto - SOLO si tienes la información confirmada>
-                    precio del servicio o servicios: <aplica la política de precios arriba descrita para (1) Hoja de vida = 50.000$ y (2) Mejora de perfil = 80.000$; para el resto usa el contexto o indica si falta>
+                    Información sobre el servicio o servicios: <qué incluye, cómo funciona y tiempos si están en contexto - SOLO si tienes la información confirmada>
+                    Precio del servicio o servicios: <aplica precios específicos para nivel {user_role} según tu base de conocimiento, excepto hoja de vida=50.000$ y mejora de perfil=80.000$ que son fijos>
                     
                     - Paso 1: llenar el formulario {PAYMENT_FORM_URL} (indica que este paso es fundamental para poder seguir)
 
