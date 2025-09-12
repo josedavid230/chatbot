@@ -246,7 +246,11 @@ class Chatbot:
             'agendar', 'agenda', 'agendo', 'sesión', 'sesion', 'cita', 'reunión', 'reunion',
             'calendario', 'hora', 'horario', 'cuando', 'cuándo', 'disponible', 'disponibilidad',
             'programar', 'programa', 'appointment', 'meeting', 'schedule', 'virtual',
-            'asesoría', 'asesoria', 'consulta', 'mentoria', 'mentoría'
+            'asesoría', 'asesoria', 'consulta', 'mentoria', 'mentoría',
+            'Agendar', 'Agenda', 'Agendo', 'Sesión', 'Sesion', 'Cita', 'Reunión', 'Reunion',
+            'Calendario', 'Hora', 'Horario', 'Cuando', 'Cuándo', 'Disponible', 'Disponibilidad',
+            'Programar', 'Programa', 'Appointment', 'Meeting', 'Schedule', 'Virtual',
+            'Asesoría', 'Asesoria', 'Consulta', 'Mentoria', 'Mentoría'
         ]
         text_lower = user_input.lower().strip()
         return any(keyword in text_lower for keyword in scheduling_keywords)
@@ -370,7 +374,7 @@ class Chatbot:
                 return response_text
 
             elif self.state == ConversationState.AWAITING_SERVICE_CHOICE:
-                service_keywords = ['hoja de vida','Hoja', 'Hoja de vida', 'Optimización', 'Optimización de Hoja de vida', 'ats','Optimización de Hoja de vida (ATS)','Mejora de perfil en plataformas de empleo','Preparación para Entrevistas','Preparacion para Entrevistas','Estrategia de búsqueda de empleo','Estrategia de busqueda de empleo','Simulación de entrevista con feedback','Simulacion de entrevista con feedback','Metodo X','Test EPI','Evaluación de Personalidad Integral','1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x'  ]
+                service_keywords = ['hoja de vida','Hoja', 'Hoja de vida', 'Optimización', 'Optimización de Hoja de vida', 'ats','Optimización de Hoja de vida (ATS)','Mejora de perfil en plataformas de empleo','Preparación para Entrevistas','Preparacion para Entrevistas','Estrategia de búsqueda de empleo','Estrategia de busqueda de empleo','Simulación de entrevista con feedback','Simulacion de entrevista con feedback','Metodo X','Test EPI','Evaluación de Personalidad Integral','1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x', 'Ats', 'Mejora', 'Mejorar', 'Preparación']
                 is_service_choice = any(keyword in user_input.lower() for keyword in service_keywords)
 
                 if not is_service_choice:
@@ -483,18 +487,26 @@ class Chatbot:
                 # Detectar confirmación individual de pasos para dar retroalimentación
                 elif payment_status['paso1'] and not payment_status['paso3']:
                     response_text = (
-                        "¡Perfecto! ✅ Has completado el formulario (paso 1).\n\n"
-                        "Ahora solo falta confirmar el pago (paso 3) para poder agendar tu sesión virtual.\n\n"
-                        "Una vez realices el pago, confírmalo aquí para enviarte el link del calendario. 😊"
+                        "¡Confirmado! ✅ Has completado el formulario (paso 1).\n\n"
+                        "Ahora te falta completar el paso 3 (realizar el pago) para poder agendar tu sesión virtual.\n\n"
+                        "Una vez realices el pago, confírmalo escribiendo algo como:\n"
+                        "• 'Realicé el pago'\n"
+                        "• 'Ya pagué'\n"
+                        "• 'Pago listo'\n\n"
+                        "Y te enviaré inmediatamente el link del calendario. 😊"
                     )
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
                 
                 elif payment_status['paso3'] and not payment_status['paso1']:
                     response_text = (
-                        "¡Excelente! ✅ Has confirmado el pago (paso 3).\n\n"
-                        "Ahora solo falta completar el formulario (paso 1) para poder agendar tu sesión virtual.\n\n"
-                        "Una vez llenes el formulario, confírmalo aquí para enviarte el link del calendario. 😊"
+                        "¡Confirmado! ✅ Has completado el pago (paso 3).\n\n"
+                        "Ahora te falta completar el paso 1 (llenar el formulario) para poder agendar tu sesión virtual.\n\n"
+                        "Una vez completes el formulario, confírmalo escribiendo algo como:\n"
+                        "• 'Completé el formulario'\n"
+                        "• 'Ya llené el formulario'\n"
+                        "• 'Formulario listo'\n\n"
+                        "Y te enviaré inmediatamente el link del calendario. 😊"
                     )
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
@@ -506,7 +518,10 @@ class Chatbot:
                 show_services_phrases = [
                     "mostrar servicios", "ver servicios", "lista de servicios", "todos los servicios",
                     "que servicios tienen", "cuales servicios", "opciones disponibles", 
-                    "mostrar opciones", "ver opciones", "lista completa"
+                    "mostrar opciones", "ver opciones", "lista completa",
+                    "Mostrar servicios", "Ver servicios", "Lista de servicios", "Todos los servicios",
+                    "Que servicios tienen", "Cuales servicios", "Opciones disponibles", 
+                    "Mostrar opciones", "Ver opciones", "Lista completa"
                 ]
                 
                 # Solo activar la plantilla si es muy específico
@@ -545,19 +560,34 @@ class Chatbot:
         """Detecta si el usuario confirma el paso 1 (formulario) y/o paso 3 (pago)."""
         text_lower = user_input.lower().strip()
         
-        # Palabras clave para confirmar paso 1 (formulario)
+        # Palabras clave para confirmar paso 1 (formulario) - en minúsculas y mayúsculas
         paso1_keywords = [
+            'completé el formulario', 'llené el formulario', 'formulario listo', 
+            'formulario completo', 'ya llené', 'ya completé', 'paso 1 listo',
+            'paso uno listo', 'formulario enviado', 'envié el formulario', 'listo paso uno',
+            'listo paso 1', 'confirmo paso 1', 'confirmo paso uno', 'complete el formulario',
+            'complete formulario', 'llene el formulario', 'llene formulario', 'hice el formulario',
+            'rellené el formulario', 'terminé el formulario', 'finalicé el formulario',
             'Completé el formulario', 'Llené el formulario', 'Formulario listo', 
             'Formulario completo', 'Ya llené', 'Ya completé', 'Paso 1 listo',
             'Paso uno listo', 'Formulario enviado', 'Envié el formulario', 'Listo paso uno',
-            'Listo paso 1', 'Confirmo paso 1', 'Confirmo paso uno'
+            'Listo paso 1', 'Confirmo paso 1', 'Confirmo paso uno', 'Complete el formulario',
+            'Complete formulario', 'Llene el formulario', 'Llene formulario', 'Hice el formulario',
+            'Rellené el formulario', 'Terminé el formulario', 'Finalicé el formulario'
         ]
         
-        # Palabras clave para confirmar paso 3 (pago)
+        # Palabras clave para confirmar paso 3 (pago) - en minúsculas y mayúsculas
         paso3_keywords = [
+            'realicé el pago', 'hice el pago', 'pago realizado', 'pago listo',
+            'ya pagué', 'pagué', 'transferencia realizada', 'paso 3 listo',
+            'paso tres listo', 'pago confirmado', 'envié el pago', 'realize el pago',
+            'hice transferencia', 'transferí', 'pague', 'efectué el pago', 'pagado',
+            'pago hecho', 'transferencia lista', 'confirmé el pago', 'pago enviado',
             'Realicé el pago', 'Hice el pago', 'Pago realizado', 'Pago listo',
             'Ya pagué', 'Pagué', 'Transferencia realizada', 'Paso 3 listo',
-            'Paso tres listo', 'Pago confirmado', 'Envié el pago'
+            'Paso tres listo', 'Pago confirmado', 'Envié el pago', 'Realize el pago',
+            'Hice transferencia', 'Transferí', 'Pague', 'Efectué el pago', 'Pagado',
+            'Pago hecho', 'Transferencia lista', 'Confirmé el pago', 'Pago enviado'
         ]
         
         # Detectar confirmaciones
@@ -588,7 +618,10 @@ class Chatbot:
         query_keywords = [
             'formulario', 'pago', 'paso', 'transferencia', 'banco', 'cuenta',
             'cómo pago', 'donde pago', 'cuánto cuesta', 'precio', 'valor',
-            'información', 'datos', 'llenar', 'completar', 'enviar'
+            'información', 'datos', 'llenar', 'completar', 'enviar',
+            'Formulario', 'Pago', 'Paso', 'Transferencia', 'Banco', 'Cuenta',
+            'Cómo pago', 'Donde pago', 'Cuánto cuesta', 'Precio', 'Valor',
+            'Información', 'Datos', 'Llenar', 'Completar', 'Enviar'
         ]
         
         return any(keyword in text_lower for keyword in query_keywords)
