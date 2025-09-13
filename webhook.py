@@ -29,6 +29,12 @@ HUMAN_PAUSED_USERS = {}  # {user_number: timestamp_when_paused}
 HUMAN_PAUSE_DURATION_HOURS = 4  # Duración de la pausa en horas
 HUMAN_INTERVENTION_KEYWORD = "Hola soy un agente de ventas de xtalento, gracias por escribir"
 
+# Mensaje estándar del bot para detectar intervención humana al inicio
+STANDARD_FIRST_BOT_MESSAGE = "¡Hola! 👋 Soy Xtalento Bot, aquí para ayudarte con información sobre nuestros servicios y resolver cualquier duda que tengas. Me encantaría conocerte un poco más, ¿podrías decirme tu nombre y la ciudad desde la que escribes?"
+
+# Variable para rastrear usuarios que ya han tenido conversaciones
+USERS_WITH_CONVERSATION_HISTORY = set()  # {user_number}
+
 def pause_bot_for_human_intervention(user_number: str):
     """Pausa el bot para un usuario por intervención humana."""
     pause_timestamp = time.time()
@@ -57,6 +63,46 @@ def resume_bot_for_user(user_number: str):
     if user_number in HUMAN_PAUSED_USERS:
         del HUMAN_PAUSED_USERS[user_number]
         print(f"[MANUAL RESUME] Bot reactivado manualmente para {user_number}")
+
+def clear_conversation_history(user_number: str):
+    """Limpia el historial de conversación de un usuario (útil para testing o reinicio)."""
+    if user_number in USERS_WITH_CONVERSATION_HISTORY:
+        USERS_WITH_CONVERSATION_HISTORY.remove(user_number)
+        print(f"[CLEAR HISTORY] Historial de conversación limpiado para {user_number}")
+
+def has_conversation_history(user_number: str) -> bool:
+    """Verifica si un usuario ya tiene historial de conversación."""
+    return user_number in USERS_WITH_CONVERSATION_HISTORY
+
+def mark_user_conversation_started(user_number: str):
+    """Marca que un usuario ya inició una conversación."""
+    USERS_WITH_CONVERSATION_HISTORY.add(user_number)
+
+def detect_human_intervention_at_start(message_content: str, user_number: str) -> bool:
+    """
+    Detecta si un humano intervino desde el primer mensaje de la conversación.
+    
+    Returns:
+        True si se detectó intervención humana al inicio, False en caso contrario
+    """
+    # Verificar si es el primer mensaje de este usuario
+    if not has_conversation_history(user_number):
+        # Limpiar el mensaje para comparación
+        cleaned_message = message_content.strip()
+        
+        # Si el primer mensaje NO es el mensaje estándar del bot, un humano intervino
+        if cleaned_message != STANDARD_FIRST_BOT_MESSAGE:
+            print(f"[HUMAN_INTERVENTION_START] Detectada intervención humana al inicio para usuario {user_number}")
+            print(f"[DEBUG] Mensaje recibido: '{cleaned_message[:100]}...'")
+            print(f"[DEBUG] Mensaje esperado: '{STANDARD_FIRST_BOT_MESSAGE[:100]}...'")
+            
+            # Pausar el bot por intervención humana
+            pause_bot_for_human_intervention(user_number)
+            return True
+    
+    # Marcar que este usuario ya tiene historial de conversación
+    mark_user_conversation_started(user_number)
+    return False
 
 # 1) Configuración
 load_dotenv(override=True)
@@ -208,6 +254,11 @@ def handle_message_async(sender_number: str, text_in: str) -> None:
             print(f"[SKIP] Bot pausado para {sender_number} - Agente humano en control")
             return
         
+        # SEGUNDA VERIFICACIÓN: ¿Humano intervino desde el inicio?
+        if detect_human_intervention_at_start(text_in, sender_number):
+            print(f"[SKIP] Intervención humana detectada al inicio para {sender_number} - Bot pausado")
+            return
+        
         # Verificar si el usuario está bloqueado temporalmente
         if is_user_blocked(sender_number):
             print(f"[SKIP] Usuario {sender_number} está bloqueado temporalmente")
@@ -349,6 +400,18 @@ def resume_user_endpoint():
         return jsonify({"message": f"Bot reactivado para {user_number}"}), 200
     else:
         return jsonify({"message": f"Usuario {user_number} no estaba pausado"}), 200
+
+@app.post("/clear_user_history")
+def clear_user_history_endpoint():
+    """Endpoint para limpiar el historial de conversación de un usuario (útil para testing)."""
+    data = request.get_json()
+    user_number = data.get("user_number")
+    
+    if not user_number:
+        return jsonify({"error": "user_number is required"}), 400
+    
+    clear_conversation_history(user_number)
+    return jsonify({"message": f"Historial de conversación limpiado para {user_number}"}), 200
 
 @app.post("/webhook")
 def webhook():
