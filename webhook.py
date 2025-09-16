@@ -29,11 +29,6 @@ HUMAN_PAUSED_USERS = {}  # {user_number: timestamp_when_paused}
 HUMAN_PAUSE_DURATION_HOURS = 4  # Duración de la pausa en horas
 HUMAN_INTERVENTION_KEYWORD = "Hola soy un agente de ventas de xtalento, gracias por escribir"
 
-# Mensaje estándar del bot para detectar intervención humana al inicio
-STANDARD_FIRST_BOT_MESSAGE = "¡Hola! 👋 Soy Xtalento Bot, aquí para ayudarte con información sobre nuestros servicios y resolver cualquier duda que tengas. Me encantaría conocerte un poco más, ¿podrías decirme tu nombre y la ciudad desde la que escribes?"
-
-# Variable para rastrear usuarios que ya han tenido conversaciones
-USERS_WITH_CONVERSATION_HISTORY = set()  # {user_number}
 
 def pause_bot_for_human_intervention(user_number: str):
     """Pausa el bot para un usuario específico por intervención humana."""
@@ -69,58 +64,6 @@ def resume_bot_for_user(user_number: str):
         del HUMAN_PAUSED_USERS[user_number]
         print(f"[MANUAL RESUME] Bot reactivado manualmente para {user_number}")
 
-def clear_conversation_history(user_number: str):
-    """Limpia el historial de conversación de un usuario (útil para testing o reinicio)."""
-    if user_number in USERS_WITH_CONVERSATION_HISTORY:
-        USERS_WITH_CONVERSATION_HISTORY.remove(user_number)
-        print(f"[CLEAR HISTORY] Historial de conversación limpiado para {user_number}")
-
-def has_conversation_history(user_number: str) -> bool:
-    """Verifica si un usuario ya tiene historial de conversación."""
-    return user_number in USERS_WITH_CONVERSATION_HISTORY
-
-def mark_user_conversation_started(user_number: str):
-    """Marca que un usuario ya inició una conversación."""
-    USERS_WITH_CONVERSATION_HISTORY.add(user_number)
-
-def detect_human_intervention_at_start(message_content: str, user_number: str) -> bool:
-    """
-    Detecta si un humano intervino desde el primer mensaje de la conversación.
-    
-    Returns:
-        True si se detectó intervención humana al inicio, False en caso contrario
-    """
-    print(f"[DEBUG_INTERVENTION] Verificando intervención para usuario {user_number}")
-    print(f"[DEBUG_INTERVENTION] ¿Tiene historial? {has_conversation_history(user_number)}")
-    
-    # Verificar si es el primer mensaje de este usuario
-    if not has_conversation_history(user_number):
-        # Limpiar el mensaje para comparación
-        cleaned_message = message_content.strip()
-        
-        print(f"[DEBUG_INTERVENTION] Primer mensaje detectado para {user_number}")
-        print(f"[DEBUG_INTERVENTION] Mensaje recibido (primeros 50 chars): '{cleaned_message[:50]}'")
-        print(f"[DEBUG_INTERVENTION] Mensaje esperado (primeros 50 chars): '{STANDARD_FIRST_BOT_MESSAGE[:50]}'")
-        
-        # Si el primer mensaje NO es el mensaje estándar del bot, un humano intervino
-        if cleaned_message != STANDARD_FIRST_BOT_MESSAGE:
-            print(f"[HUMAN_INTERVENTION_START] ⚠️  DETECTADA intervención humana al inicio para usuario {user_number}")
-            print(f"[HUMAN_INTERVENTION_START] Pausando SOLO el usuario {user_number}")
-            
-            # Pausar el bot SOLO para este usuario específico
-            pause_bot_for_human_intervention(user_number)
-            
-            # Marcar historial para evitar re-detección
-            mark_user_conversation_started(user_number)
-            return True
-        else:
-            print(f"[DEBUG_INTERVENTION] ✅ Mensaje estándar del bot detectado para {user_number}")
-    else:
-        print(f"[DEBUG_INTERVENTION] Usuario {user_number} ya tiene historial, no es primer mensaje")
-    
-    # Marcar que este usuario ya tiene historial de conversación
-    mark_user_conversation_started(user_number)
-    return False
 
 # 1) Configuración
 load_dotenv(override=True)
@@ -272,11 +215,6 @@ def handle_message_async(sender_number: str, text_in: str) -> None:
             print(f"[SKIP] Bot pausado para {sender_number} - Agente humano en control")
             return
         
-        # SEGUNDA VERIFICACIÓN: ¿Humano intervino desde el inicio?
-        if detect_human_intervention_at_start(text_in, sender_number):
-            print(f"[SKIP] Intervención humana detectada al inicio para {sender_number} - Bot pausado")
-            return
-        
         # Verificar si el usuario está bloqueado temporalmente
         if is_user_blocked(sender_number):
             print(f"[SKIP] Usuario {sender_number} está bloqueado temporalmente")
@@ -419,17 +357,6 @@ def resume_user_endpoint():
     else:
         return jsonify({"message": f"Usuario {user_number} no estaba pausado"}), 200
 
-@app.post("/clear_user_history")
-def clear_user_history_endpoint():
-    """Endpoint para limpiar el historial de conversación de un usuario (útil para testing)."""
-    data = request.get_json()
-    user_number = data.get("user_number")
-    
-    if not user_number:
-        return jsonify({"error": "user_number is required"}), 400
-    
-    clear_conversation_history(user_number)
-    return jsonify({"message": f"Historial de conversación limpiado para {user_number}"}), 200
 
 @app.get("/debug_user_status/<user_number>")
 def debug_user_status(user_number: str):
@@ -437,11 +364,9 @@ def debug_user_status(user_number: str):
     return jsonify({
         "user_number": user_number,
         "is_paused_by_human": is_bot_paused_by_human(user_number),
-        "has_conversation_history": has_conversation_history(user_number),
         "is_in_paused_users_dict": user_number in HUMAN_PAUSED_USERS,
         "total_paused_users": len(HUMAN_PAUSED_USERS),
         "all_paused_users": list(HUMAN_PAUSED_USERS.keys()),
-        "users_with_history": list(USERS_WITH_CONVERSATION_HISTORY),
         "pause_duration_hours": HUMAN_PAUSE_DURATION_HOURS
     }), 200
 
