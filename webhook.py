@@ -24,45 +24,11 @@ import os
 import requests
 from datetime import datetime, timedelta
 
-# Variables para sistema de pausa por intervención humana
-HUMAN_PAUSED_USERS = {}  # {user_number: timestamp_when_paused}
-HUMAN_PAUSE_DURATION_HOURS = 4  # Duración de la pausa en horas
+# Keyword para detección de intervención humana (mantener solo para fromMe)
 HUMAN_INTERVENTION_KEYWORD = "Hola soy un agente de ventas de xtalento, gracias por escribir"
 
 
-def pause_bot_for_human_intervention(user_number: str):
-    """Pausa el bot para un usuario específico por intervención humana."""
-    pause_timestamp = time.time()
-    HUMAN_PAUSED_USERS[user_number] = pause_timestamp
-    print(f"[HUMAN INTERVENTION] ⏸️  Bot pausado ESPECÍFICAMENTE para usuario {user_number} por {HUMAN_PAUSE_DURATION_HOURS} horas")
-    print(f"[HUMAN INTERVENTION] Otros usuarios NO se ven afectados")
-    print(f"[HUMAN INTERVENTION] Total usuarios pausados: {len(HUMAN_PAUSED_USERS)}")
-
-def is_bot_paused_by_human(user_number: str) -> bool:
-    """Verifica si el bot está pausado por intervención humana para un usuario específico."""
-    if user_number not in HUMAN_PAUSED_USERS:
-        return False
-    
-    pause_timestamp = HUMAN_PAUSED_USERS[user_number]
-    current_time = time.time()
-    elapsed_hours = (current_time - pause_timestamp) / 3600  # Convertir a horas
-    
-    print(f"[PAUSE_CHECK] Usuario {user_number} pausado hace {elapsed_hours:.2f} horas")
-    
-    # Si han pasado más de 4 horas, reactivar automáticamente
-    if elapsed_hours >= HUMAN_PAUSE_DURATION_HOURS:
-        del HUMAN_PAUSED_USERS[user_number]
-        print(f"[AUTO RESUME] ✅ Bot reactivado automáticamente para {user_number} después de {HUMAN_PAUSE_DURATION_HOURS} horas")
-        return False
-    
-    print(f"[PAUSE_CHECK] ⏸️  Usuario {user_number} permanece pausado")
-    return True
-
-def resume_bot_for_user(user_number: str):
-    """Reactiva el bot manualmente para un usuario."""
-    if user_number in HUMAN_PAUSED_USERS:
-        del HUMAN_PAUSED_USERS[user_number]
-        print(f"[MANUAL RESUME] Bot reactivado manualmente para {user_number}")
+# Funciones del sistema anterior eliminadas - reemplazadas por sistema Redis
 
 
 # 1) Configuración
@@ -210,11 +176,6 @@ def send_whatsapp_text(number: str, text: str) -> tuple[int, str]:
 def handle_message_async(sender_number: str, text_in: str) -> None:
     """Procesa el mensaje y envía la respuesta en background."""
     try:
-        # PRIMERA VERIFICACIÓN: ¿Está pausado por intervención humana?
-        if is_bot_paused_by_human(sender_number):
-            print(f"[SKIP] Bot pausado para {sender_number} - Agente humano en control")
-            return
-        
         # Verificar si el usuario está bloqueado temporalmente
         if is_user_blocked(sender_number):
             print(f"[SKIP] Usuario {sender_number} está bloqueado temporalmente")
@@ -321,54 +282,7 @@ def check_webhook_endpoint():
     status, body = find_webhook()
     return jsonify({"status": status, "body": body}), 200
 
-@app.get("/paused_users")
-def get_paused_users():
-    """Endpoint para consultar usuarios pausados por intervención humana."""
-    current_time = time.time()
-    paused_info = {}
-    
-    for user_number, pause_timestamp in HUMAN_PAUSED_USERS.items():
-        elapsed_hours = (current_time - pause_timestamp) / 3600
-        remaining_hours = max(0, HUMAN_PAUSE_DURATION_HOURS - elapsed_hours)
-        paused_info[user_number] = {
-            "paused_since": datetime.fromtimestamp(pause_timestamp).isoformat(),
-            "remaining_hours": round(remaining_hours, 2)
-        }
-    
-    return jsonify({
-        "paused_users_count": len(HUMAN_PAUSED_USERS),
-        "pause_duration_hours": HUMAN_PAUSE_DURATION_HOURS,
-        "intervention_keyword": HUMAN_INTERVENTION_KEYWORD,
-        "paused_users": paused_info
-    }), 200
-
-@app.post("/resume_user")
-def resume_user_endpoint():
-    """Endpoint para reactivar manualmente un usuario pausado."""
-    data = request.get_json()
-    user_number = data.get("user_number")
-    
-    if not user_number:
-        return jsonify({"error": "user_number is required"}), 400
-    
-    if user_number in HUMAN_PAUSED_USERS:
-        resume_bot_for_user(user_number)
-        return jsonify({"message": f"Bot reactivado para {user_number}"}), 200
-    else:
-        return jsonify({"message": f"Usuario {user_number} no estaba pausado"}), 200
-
-
-@app.get("/debug_user_status/<user_number>")
-def debug_user_status(user_number: str):
-    """Endpoint para debugging: verifica el estado completo de un usuario específico."""
-    return jsonify({
-        "user_number": user_number,
-        "is_paused_by_human": is_bot_paused_by_human(user_number),
-        "is_in_paused_users_dict": user_number in HUMAN_PAUSED_USERS,
-        "total_paused_users": len(HUMAN_PAUSED_USERS),
-        "all_paused_users": list(HUMAN_PAUSED_USERS.keys()),
-        "pause_duration_hours": HUMAN_PAUSE_DURATION_HOURS
-    }), 200
+# Endpoints del sistema anterior eliminados - serán reemplazados por sistema Redis
 
 @app.post("/webhook")
 def webhook():
@@ -407,8 +321,7 @@ def webhook():
                     remote_jid = key.get("remoteJid") or msg.get("from") or payload.get("sender") or ""
                     client_number = _jid_to_number(str(remote_jid).split(":")[0])
                     
-                    # Pausar bot para este cliente específico
-                    pause_bot_for_human_intervention(client_number)
+                    # TODO: Implementar pausa con sistema Redis
                     print(f"[HUMAN TAKEOVER] Agente humano tomó control de {client_number} con palabra clave")
                     
                     return jsonify({"ok": True, "human_intervention": True}), 200
