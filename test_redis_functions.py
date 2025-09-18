@@ -19,8 +19,13 @@ print(f"🔐 REDIS_HOST: {os.getenv('REDIS_HOST', 'NO_CONFIGURADO')}")
 print(f"🔐 REDIS_PORT: {os.getenv('REDIS_PORT', 'NO_CONFIGURADO')}")
 print(f"🔐 REDIS_PASSWORD configurado: {'Sí' if os.getenv('REDIS_PASSWORD') else 'No'}")
 print(f"🔐 REDIS_USERNAME: {os.getenv('REDIS_USERNAME', 'NO_CONFIGURADO')}")
+print(f"🔐 REDIS_SSL: {os.getenv('REDIS_SSL', 'NO_CONFIGURADO')}")
 
-# Importar funciones del webhook
+print("\n" + "="*50)
+print("🔄 IMPORTANDO FUNCIONES DEL WEBHOOK...")
+print("="*50)
+
+# Importar funciones del webhook (esto activará la nueva conexión Redis)
 from webhook import (
     redis_client, 
     get_conversation_state, 
@@ -32,6 +37,9 @@ from webhook import (
     STATE_BOT,
     STATE_HUMANO
 )
+
+print(f"✅ Importación completada. Redis client: {'Conectado' if redis_client else 'No conectado'}")
+print("="*50)
 
 def test_redis_connection():
     """Probar conexión a Redis"""
