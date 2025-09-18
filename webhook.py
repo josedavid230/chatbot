@@ -40,7 +40,8 @@ REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
 REDIS_USERNAME = os.getenv('REDIS_USERNAME', 'default')
-REDIS_SSL = os.getenv('REDIS_SSL', 'false').lower() == 'true'
+# Redis Cloud requiere SSL por defecto
+REDIS_SSL = os.getenv('REDIS_SSL', 'true').lower() == 'true'
 
 # Configuración de tiempos
 INACTIVITY_TIMEOUT_HOURS = 1  # Tiempo para reactivar bot automáticamente
@@ -50,22 +51,43 @@ BOT_SENT_MESSAGE_IDS = set()  # Para detectar ecos del bot
 def get_redis_connection():
     """Obtiene conexión a Redis Cloud."""
     try:
-        r = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            username=REDIS_USERNAME if REDIS_PASSWORD else None,
-            ssl=REDIS_SSL,
-            ssl_cert_reqs=None if REDIS_SSL else None,
-            decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5
-        )
+        # Para Redis Cloud, configuración SSL mejorada
+        connection_params = {
+            'host': REDIS_HOST,
+            'port': REDIS_PORT,
+            'password': REDIS_PASSWORD,
+            'decode_responses': True,
+            'socket_connect_timeout': 10,
+            'socket_timeout': 10,
+            'retry_on_timeout': True,
+            'health_check_interval': 30
+        }
+        
+        # Configurar SSL para Redis Cloud
+        if REDIS_SSL:
+            import ssl
+            connection_params.update({
+                'ssl': True,
+                'ssl_cert_reqs': ssl.CERT_NONE,  # No verificar certificado (para Redis Cloud)
+                'ssl_check_hostname': False,
+                'ssl_ca_certs': None
+            })
+        
+        # Agregar username solo si hay password
+        if REDIS_PASSWORD:
+            connection_params['username'] = REDIS_USERNAME
+        
+        print(f"[REDIS] Conectando a {REDIS_HOST}:{REDIS_PORT} (SSL: {REDIS_SSL})")
+        r = redis.Redis(**connection_params)
+        
         # Test de conexión
         r.ping()
+        print(f"[REDIS] ✅ Conexión exitosa")
         return r
+        
     except Exception as e:
         print(f"[REDIS ERROR] No se pudo conectar a Redis: {e}")
+        print(f"[REDIS DEBUG] Host: {REDIS_HOST}, Port: {REDIS_PORT}, SSL: {REDIS_SSL}")
         return None
 
 # Inicializar conexión Redis
