@@ -127,6 +127,49 @@ def get_redis_connection():
     except Exception as e:
         print(f"[REDIS] Conexión con URL falló: {e}")
     
+    # Configuración especial para Redis Cloud (sin SSL)
+    try:
+        print("[REDIS] Probando conexión directa sin SSL (Redis Cloud legacy)...")
+        r = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            password=REDIS_PASSWORD,
+            username=REDIS_USERNAME if REDIS_PASSWORD else None,
+            decode_responses=True,
+            ssl=False,
+            socket_connect_timeout=30,
+            socket_timeout=30
+        )
+        r.ping()
+        print("[REDIS] ✅ Conexión exitosa sin SSL")
+        return r
+    except Exception as e:
+        print(f"[REDIS] Conexión sin SSL falló: {e}")
+    
+    # Intentar con certificados SSL específicos
+    try:
+        print("[REDIS] Probando con SSL y configuración específica para Redis Cloud...")
+        import ssl
+        
+        r = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            password=REDIS_PASSWORD,
+            username=REDIS_USERNAME if REDIS_PASSWORD else None,
+            decode_responses=True,
+            ssl=True,
+            ssl_cert_reqs=ssl.CERT_NONE,
+            ssl_check_hostname=False,
+            ssl_ca_certs=None,
+            socket_connect_timeout=30,
+            socket_timeout=30
+        )
+        r.ping()
+        print("[REDIS] ✅ Conexión exitosa con SSL específico")
+        return r
+    except Exception as e:
+        print(f"[REDIS] SSL específico falló: {e}")
+    
     print(f"[REDIS ERROR] ❌ Todas las configuraciones fallaron")
     print(f"[REDIS DEBUG] Host: {REDIS_HOST}, Port: {REDIS_PORT}, SSL: {REDIS_SSL}")
     print(f"[REDIS DEBUG] Password configurado: {'Sí' if REDIS_PASSWORD else 'No'}")
