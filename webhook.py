@@ -22,14 +22,174 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import os
 import requests
+import redis
+import json
 from datetime import datetime, timedelta
 
 # Keyword para detección de intervención humana (mantener solo para fromMe)
 HUMAN_INTERVENTION_KEYWORD = "Hola soy un agente de ventas de xtalento, gracias por escribir"
 
+# ===== SISTEMA REDIS PARA ESTADOS DE CONVERSACIÓN =====
 
-# Funciones del sistema anterior eliminadas - reemplazadas por sistema Redis
+# Estados de conversación
+STATE_BOT = "BOT"
+STATE_HUMANO = "HUMANO"
 
+# Configuración Redis
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+REDIS_USERNAME = os.getenv('REDIS_USERNAME', 'default')
+REDIS_SSL = os.getenv('REDIS_SSL', 'false').lower() == 'true'
+
+# Configuración de tiempos
+INACTIVITY_TIMEOUT_HOURS = 1  # Tiempo para reactivar bot automáticamente
+BOT_SENT_MESSAGE_IDS = set()  # Para detectar ecos del bot
+
+# Conexión Redis
+def get_redis_connection():
+    """Obtiene conexión a Redis Cloud."""
+    try:
+        r = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            password=REDIS_PASSWORD,
+            username=REDIS_USERNAME if REDIS_PASSWORD else None,
+            ssl=REDIS_SSL,
+            ssl_cert_reqs=None if REDIS_SSL else None,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5
+        )
+        # Test de conexión
+        r.ping()
+        return r
+    except Exception as e:
+        print(f"[REDIS ERROR] No se pudo conectar a Redis: {e}")
+        return None
+
+# Inicializar conexión Redis
+redis_client = get_redis_connection()
+
+# ===== FUNCIONES CORE PARA MANEJO DE ESTADOS =====
+
+def get_conversation_state(chat_id: str) -> str:
+    """
+    Obtiene el estado actual de una conversación.
+    Retorna STATE_BOT por defecto si no existe.
+    """
+    if not redis_client:
+        print("[REDIS WARNING] Redis no disponible, usando estado BOT por defecto")
+        return STATE_BOT
+    
+    try:
+        state_key = f"chat_state:{chat_id}"
+        state_data = redis_client.hgetall(state_key)
+        
+        if state_data and 'state' in state_data:
+            print(f"[REDIS GET] Estado para {chat_id}: {state_data['state']}")
+            return state_data['state']
+        else:
+            print(f"[REDIS GET] No hay estado para {chat_id}, usando BOT por defecto")
+            return STATE_BOT
+    except Exception as e:
+        print(f"[REDIS ERROR] Error obteniendo estado para {chat_id}: {e}")
+        return STATE_BOT
+
+def set_conversation_state(chat_id: str, state: str, reason: str = ""):
+    """
+    Establece el estado de una conversación en Redis.
+    """
+    if not redis_client:
+        print("[REDIS WARNING] Redis no disponible, no se puede guardar estado")
+        return False
+    
+    try:
+        state_key = f"chat_state:{chat_id}"
+        current_time = int(time.time())
+        
+        state_data = {
+            'state': state,
+            'last_activity': str(current_time),
+            'reason': reason,
+            'updated_at': datetime.now().isoformat()
+        }
+        
+        # Guardar con TTL de 24 horas (auto-cleanup)
+        redis_client.hset(state_key, mapping=state_data)
+        redis_client.expire(state_key, 24 * 3600)  # 24 horas
+        
+        print(f"[REDIS SET] Estado {state} establecido para {chat_id} (razón: {reason})")
+        return True
+    except Exception as e:
+        print(f"[REDIS ERROR] Error estableciendo estado para {chat_id}: {e}")
+        return False
+
+def update_last_activity(chat_id: str):
+    """
+    Actualiza el timestamp de última actividad para un chat.
+    """
+    if not redis_client:
+        return False
+    
+    try:
+        state_key = f"chat_state:{chat_id}"
+        current_time = int(time.time())
+        
+        redis_client.hset(state_key, 'last_activity', str(current_time))
+        print(f"[REDIS UPDATE] Actividad actualizada para {chat_id}")
+        return True
+    except Exception as e:
+        print(f"[REDIS ERROR] Error actualizando actividad para {chat_id}: {e}")
+        return False
+
+def add_bot_message_id(message_id: str):
+    """
+    Agrega ID de mensaje enviado por el bot para detectar ecos.
+    """
+    BOT_SENT_MESSAGE_IDS.add(message_id)
+    # Mantener solo los últimos 100 IDs para evitar memoria excesiva
+    if len(BOT_SENT_MESSAGE_IDS) > 100:
+        BOT_SENT_MESSAGE_IDS.pop()
+
+def is_bot_message_echo(message_id: str) -> bool:
+    """
+    Verifica si un mensaje fromMe es un eco del bot.
+    """
+    if message_id in BOT_SENT_MESSAGE_IDS:
+        BOT_SENT_MESSAGE_IDS.remove(message_id)
+        return True
+    return False
+
+def should_change_to_human_state(chat_id: str, message_data: dict) -> tuple[bool, str]:
+    """
+    Determina si se debe cambiar a estado HUMANO y por qué razón.
+    
+    Returns:
+        (should_change: bool, reason: str)
+    """
+    reasons = []
+    
+    # Caso 1: Mensaje fromMe que no es eco del bot (agente interviene)
+    if message_data.get('fromMe', False):
+        msg_id = message_data.get('id', '')
+        if not is_bot_message_echo(msg_id):
+            reasons.append("AGENTE_INTERVIENE")
+    
+    # Caso 2: Cliente escribe "agente" 
+    text = message_data.get('text', '').lower()
+    if not message_data.get('fromMe', False) and 'agente' in text:
+        reasons.append("CLIENTE_SOLICITA_AGENTE")
+    
+    # Caso 3: Keyword específica de agente
+    if (message_data.get('fromMe', False) and 
+        HUMAN_INTERVENTION_KEYWORD.lower() in text):
+        reasons.append("AGENTE_KEYWORD")
+    
+    if reasons:
+        return True, " + ".join(reasons)
+    
+    return False, ""
 
 # 1) Configuración
 load_dotenv(override=True)
