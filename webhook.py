@@ -614,7 +614,7 @@ def clear_sessions():
         _user_bots.clear()
     return jsonify({"ok": True, "cleared": True}), 200
 
-# Gestión de usuarios bloqueados
+# Gestión de usuarios bloqueados (sistema legacy)
 @app.get("/blocked_users")
 def list_blocked_users():
     """Lista usuarios bloqueados y tiempo restante."""
@@ -630,6 +630,136 @@ def list_blocked_users():
                     "remaining_readable": str(remaining).split('.')[0]
                 }
         return jsonify({"blocked_users": blocked_info}), 200
+
+# Gestión de usuarios pausados (sistema Redis)
+@app.get("/paused_users")
+def list_paused_users():
+    """Lista usuarios en estado HUMANO (pausados)."""
+    if not redis_client:
+        return jsonify({"error": "Redis no disponible"}), 500
+    
+    try:
+        chat_keys = redis_client.keys("chat_state:*")
+        current_time = int(time.time())
+        paused_users = {}
+        
+        for key in chat_keys:
+            try:
+                state_data = redis_client.hgetall(key)
+                
+                if state_data.get('state') == STATE_HUMANO:
+                    chat_id = key.replace("chat_state:", "")
+                    last_activity = int(state_data.get('last_activity', 0))
+                    paused_seconds = current_time - last_activity
+                    
+                    paused_users[chat_id] = {
+                        "reason": state_data.get('reason', 'UNKNOWN'),
+                        "paused_seconds": paused_seconds,
+                        "paused_readable": str(timedelta(seconds=paused_seconds)).split('.')[0],
+                        "updated_at": state_data.get('updated_at', 'UNKNOWN'),
+                        "changed_by": state_data.get('changed_by', 'UNKNOWN')
+                    }
+                    
+            except Exception as e:
+                print(f"[PAUSED USERS ERROR] Error procesando {key}: {e}")
+                continue
+        
+        return jsonify({
+            "paused_users": paused_users,
+            "total_paused": len(paused_users)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/unpause_user/<user_number>")
+def unpause_specific_user(user_number: str):
+    """Despausar un usuario específico."""
+    if not redis_client:
+        return jsonify({"error": "Redis no disponible"}), 500
+    
+    try:
+        state_key = f"chat_state:{user_number}"
+        state_data = redis_client.hgetall(state_key)
+        
+        if not state_data:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        
+        if state_data.get('state') != STATE_HUMANO:
+            return jsonify({
+                "error": "Usuario no está pausado",
+                "current_state": state_data.get('state')
+            }), 400
+        
+        # Cambiar a estado BOT
+        current_time = int(time.time())
+        reactivation_data = {
+            'state': STATE_BOT,
+            'last_activity': str(current_time),
+            'reason': 'REACTIVACION_MANUAL_ENDPOINT',
+            'updated_at': datetime.now().isoformat(),
+            'changed_by': 'webhook_endpoint',
+            'previous_state': STATE_HUMANO,
+            'previous_reason': state_data.get('reason', 'UNKNOWN')
+        }
+        
+        redis_client.hset(state_key, mapping=reactivation_data)
+        redis_client.expire(state_key, 24 * 3600)
+        
+        return jsonify({
+            "ok": True,
+            "message": f"Usuario {user_number} despausado exitosamente",
+            "previous_reason": state_data.get('reason')
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/unpause_all_users")
+def unpause_all_users():
+    """Despausar todos los usuarios."""
+    if not redis_client:
+        return jsonify({"error": "Redis no disponible"}), 500
+    
+    try:
+        chat_keys = redis_client.keys("chat_state:*")
+        unpausados = 0
+        errores = []
+        
+        for key in chat_keys:
+            try:
+                state_data = redis_client.hgetall(key)
+                
+                if state_data.get('state') == STATE_HUMANO:
+                    chat_id = key.replace("chat_state:", "")
+                    
+                    # Cambiar a estado BOT
+                    current_time = int(time.time())
+                    reactivation_data = {
+                        'state': STATE_BOT,
+                        'last_activity': str(current_time),
+                        'reason': 'REACTIVACION_MASIVA_ENDPOINT',
+                        'updated_at': datetime.now().isoformat(),
+                        'changed_by': 'webhook_endpoint',
+                        'previous_state': STATE_HUMANO,
+                        'previous_reason': state_data.get('reason', 'UNKNOWN')
+                    }
+                    
+                    redis_client.hset(key, mapping=reactivation_data)
+                    redis_client.expire(key, 24 * 3600)
+                    unpausados += 1
+                    
+            except Exception as e:
+                errores.append(f"{key}: {str(e)}")
+        
+        return jsonify({
+            "ok": True,
+            "unpausados": unpausados,
+            "errores": errores
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.delete("/blocked_users")
 def clear_blocked_users():
