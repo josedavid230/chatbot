@@ -24,8 +24,8 @@ print(f"Username: {REDIS_USERNAME}")
 print(f"Password: {'***' if REDIS_PASSWORD else 'NO_CONFIG'}")
 print("="*50)
 
-# Test 1: Conexión simple sin SSL
-print("\n🧪 TEST 1: SIN SSL")
+# Test 1: SSL estricto (Redis Cloud estándar)
+print("\n🧪 TEST 1: SSL ESTRICTO")
 try:
     r1 = redis.Redis(
         host=REDIS_HOST,
@@ -33,33 +33,19 @@ try:
         password=REDIS_PASSWORD,
         username=REDIS_USERNAME,
         decode_responses=True,
-        ssl=False
+        ssl=True,
+        ssl_cert_reqs=ssl.CERT_REQUIRED,
+        ssl_check_hostname=True
     )
     result1 = r1.ping()
-    print(f"✅ SIN SSL: {result1}")
+    print(f"✅ SSL ESTRICTO: {result1}")
 except Exception as e:
-    print(f"❌ SIN SSL: {e}")
+    print(f"❌ SSL ESTRICTO: {e}")
 
-# Test 2: SSL básico
-print("\n🧪 TEST 2: SSL BÁSICO")
+# Test 2: SSL sin verificación de certificado
+print("\n🧪 TEST 2: SSL SIN VERIFICACIÓN DE CERTIFICADO")
 try:
     r2 = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        password=REDIS_PASSWORD,
-        username=REDIS_USERNAME,
-        decode_responses=True,
-        ssl=True
-    )
-    result2 = r2.ping()
-    print(f"✅ SSL BÁSICO: {result2}")
-except Exception as e:
-    print(f"❌ SSL BÁSICO: {e}")
-
-# Test 3: SSL sin verificación
-print("\n🧪 TEST 3: SSL SIN VERIFICACIÓN")
-try:
-    r3 = redis.Redis(
         host=REDIS_HOST,
         port=REDIS_PORT,
         password=REDIS_PASSWORD,
@@ -69,10 +55,28 @@ try:
         ssl_cert_reqs=ssl.CERT_NONE,
         ssl_check_hostname=False
     )
-    result3 = r3.ping()
-    print(f"✅ SSL SIN VERIFICACIÓN: {result3}")
+    result2 = r2.ping()
+    print(f"✅ SSL SIN VERIFICACIÓN: {result2}")
 except Exception as e:
     print(f"❌ SSL SIN VERIFICACIÓN: {e}")
+
+# Test 3: SSL con cert_reqs=None (Redis Cloud común)
+print("\n🧪 TEST 3: SSL CON CERT_REQS=NONE")
+try:
+    r3 = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        password=REDIS_PASSWORD,
+        username=REDIS_USERNAME,
+        decode_responses=True,
+        ssl=True,
+        ssl_cert_reqs=None,
+        ssl_check_hostname=False
+    )
+    result3 = r3.ping()
+    print(f"✅ SSL CERT_REQS=NONE: {result3}")
+except Exception as e:
+    print(f"❌ SSL CERT_REQS=NONE: {e}")
 
 # Test 4: URL rediss://
 print("\n🧪 TEST 4: URL REDISS://")
@@ -84,36 +88,58 @@ try:
 except Exception as e:
     print(f"❌ URL REDISS: {e}")
 
-# Test 5: URL redis:// (sin SSL)
-print("\n🧪 TEST 5: URL REDIS:// (SIN SSL)")
+# Test 5: SSL con configuración específica (como webhook.py actual)
+print("\n🧪 TEST 5: SSL CONFIGURACIÓN WEBHOOK")
 try:
-    redis_url = f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
-    r5 = redis.from_url(redis_url, decode_responses=True)
-    result5 = r5.ping()
-    print(f"✅ URL REDIS: {result5}")
-except Exception as e:
-    print(f"❌ URL REDIS: {e}")
-
-# Test 6: Conexión manual SSL con timeout largo
-print("\n🧪 TEST 6: SSL CON TIMEOUT LARGO")
-try:
-    r6 = redis.Redis(
+    r5 = redis.Redis(
         host=REDIS_HOST,
         port=REDIS_PORT,
         password=REDIS_PASSWORD,
         username=REDIS_USERNAME,
         decode_responses=True,
         ssl=True,
-        ssl_cert_reqs=None,
+        ssl_cert_reqs='none',
         ssl_check_hostname=False,
         ssl_ca_certs=None,
-        socket_connect_timeout=60,
-        socket_timeout=60
+        socket_connect_timeout=15,
+        socket_timeout=15,
+        retry_on_timeout=True
+    )
+    result5 = r5.ping()
+    print(f"✅ SSL CONFIGURACIÓN WEBHOOK: {result5}")
+except Exception as e:
+    print(f"❌ SSL CONFIGURACIÓN WEBHOOK: {e}")
+
+# Test 6: URL rediss:// con SSL automático
+print("\n🧪 TEST 6: URL REDISS CON SSL_CERT_REQS=NONE")
+try:
+    redis_url = f"rediss://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
+    r6 = redis.from_url(
+        redis_url, 
+        decode_responses=True,
+        ssl_cert_reqs=ssl.CERT_NONE,
+        ssl_check_hostname=False
     )
     result6 = r6.ping()
-    print(f"✅ SSL TIMEOUT LARGO: {result6}")
+    print(f"✅ URL REDISS CON SSL_CERT_REQS=NONE: {result6}")
 except Exception as e:
-    print(f"❌ SSL TIMEOUT LARGO: {e}")
+    print(f"❌ URL REDISS CON SSL_CERT_REQS=NONE: {e}")
+
+# Test 7: Conexión sin SSL (para comparar)
+print("\n🧪 TEST 7: SIN SSL (PARA COMPARAR)")
+try:
+    r7 = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        password=REDIS_PASSWORD,
+        username=REDIS_USERNAME,
+        decode_responses=True,
+        ssl=False
+    )
+    result7 = r7.ping()
+    print(f"✅ SIN SSL: {result7}")
+except Exception as e:
+    print(f"❌ SIN SSL: {e}")
 
 print("\n" + "="*50)
 print("🎯 PRUEBA TODAS LAS CONFIGURACIONES ARRIBA")
