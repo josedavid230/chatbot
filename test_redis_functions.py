@@ -5,10 +5,20 @@ Script de prueba para las funciones Redis del sistema de estados.
 
 import sys
 import os
-sys.path.insert(0, '/opt/xtalento/bot/chatbot')
+
+# Configurar path y variables de entorno ANTES de importar
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
 from dotenv import load_dotenv
-load_dotenv()
+# Cargar .env desde el directorio actual
+load_dotenv(os.path.join(current_dir, '.env'), override=True)
+
+print(f"📁 Directorio actual: {current_dir}")
+print(f"🔐 REDIS_HOST: {os.getenv('REDIS_HOST', 'NO_CONFIGURADO')}")
+print(f"🔐 REDIS_PORT: {os.getenv('REDIS_PORT', 'NO_CONFIGURADO')}")
+print(f"🔐 REDIS_PASSWORD configurado: {'Sí' if os.getenv('REDIS_PASSWORD') else 'No'}")
+print(f"🔐 REDIS_USERNAME: {os.getenv('REDIS_USERNAME', 'NO_CONFIGURADO')}")
 
 # Importar funciones del webhook
 from webhook import (
