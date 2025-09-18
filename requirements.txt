@@ -10,3 +10,4 @@ tiktoken
 Flask
 waitress
 redis==4.6.0
+schedule

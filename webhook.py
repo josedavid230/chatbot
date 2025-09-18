@@ -269,7 +269,7 @@ def get_user_bot(sender_number: str) -> Chatbot:
     with _bots_lock:
         bot = _user_bots.get(key)
         if bot is None:
-            bot = Chatbot(VECTORSTORE)
+            bot = Chatbot(VECTORSTORE, chat_id=sender_number)
             _user_bots[key] = bot
     return bot
 
@@ -344,7 +344,13 @@ def send_whatsapp_text(number: str, text: str) -> tuple[int, str]:
 def handle_message_async(sender_number: str, text_in: str) -> None:
     """Procesa el mensaje y envía la respuesta en background."""
     try:
-        # Verificar si el usuario está bloqueado temporalmente
+        # Verificar estado actual antes de procesar (puede haber cambiado)
+        current_state = get_conversation_state(sender_number)
+        if current_state == STATE_HUMANO:
+            print(f"[SKIP] Usuario {sender_number} está en estado HUMANO - no responder")
+            return
+        
+        # Verificar si el usuario está bloqueado temporalmente (sistema legacy)
         if is_user_blocked(sender_number):
             print(f"[SKIP] Usuario {sender_number} está bloqueado temporalmente")
             return
@@ -352,7 +358,20 @@ def handle_message_async(sender_number: str, text_in: str) -> None:
         user_bot = get_user_bot(sender_number)
         reply_text = user_bot.process_message(text_in) or "🤖"
         
-        # Detectar si el bot activó el modo agente humano
+        # Verificar nuevamente el estado después del procesamiento
+        # (el bot puede haber detectado "agente" y cambiado el estado)
+        final_state = get_conversation_state(sender_number)
+        if final_state == STATE_HUMANO:
+            print(f"[STATE CHANGED] Usuario {sender_number} cambió a HUMANO durante procesamiento")
+            # Si el mensaje es de conexión con agente, enviarlo y luego silenciar
+            if "agente" in reply_text.lower():
+                print(f"[SENDING AGENT MESSAGE] Enviando mensaje de conexión a {sender_number}")
+            else:
+                # Si cambió a HUMANO por otra razón, no enviar respuesta
+                print(f"[SKIP SEND] No enviar respuesta, estado es HUMANO")
+                return
+        
+        # Detectar si el bot activó el modo agente humano (sistema legacy)
         if "Perfecto. Te conecto con un agente humano inmediatamente" in reply_text:
             print(f"[AGENT MODE] Bloqueando usuario {sender_number} por {BLOCK_DURATION_HOURS} horas")
             block_user(sender_number)
@@ -361,8 +380,24 @@ def handle_message_async(sender_number: str, text_in: str) -> None:
         reply_text = "Lo siento, tuve un problema procesando tu mensaje. Si quieres comunicarte con un humano, menciona la palabra 'agente' en el chat."
         print("[BOT] ERROR (bg):", e)
     
+    # Enviar mensaje
     status, body = send_whatsapp_text(sender_number, reply_text)
     print(f"[SEND (bg)] -> {sender_number} [{status}] {body}")
+    
+    # Si el envío fue exitoso, agregar ID del mensaje para detectar ecos
+    if status in (200, 201):
+        try:
+            # Extraer ID del mensaje de la respuesta si está disponible
+            import json
+            response_data = json.loads(body)
+            if isinstance(response_data, dict) and 'key' in response_data:
+                msg_id = response_data['key'].get('id')
+                if msg_id:
+                    add_bot_message_id(msg_id)
+                    print(f"[BOT MSG ID] Agregado para eco: {msg_id}")
+        except:
+            # Si no se puede extraer el ID, no es crítico
+            pass
 
 
 def handle_message_async_with_remote(sender_number: str, text_in: str, remote_jid: str | None) -> None:
@@ -482,20 +517,36 @@ def webhook():
             msg = messages[0] or {}
             key = msg.get("key", {}) or {}
             if key.get("fromMe", False):
-                # Detectar intervención humana con palabra clave específica
+                # Obtener información del mensaje para detectar intervención humana
+                remote_jid = key.get("remoteJid") or msg.get("from") or payload.get("sender") or ""
+                client_number = _jid_to_number(str(remote_jid).split(":")[0])
+                msg_id = key.get("id", "")
                 agent_text = _extract_text_from_baileys(msg)
-                if agent_text and HUMAN_INTERVENTION_KEYWORD.lower() in agent_text.lower():
-                    # Obtener el número del destinatario (cliente)
-                    remote_jid = key.get("remoteJid") or msg.get("from") or payload.get("sender") or ""
-                    client_number = _jid_to_number(str(remote_jid).split(":")[0])
-                    
-                    # TODO: Implementar pausa con sistema Redis
-                    print(f"[HUMAN TAKEOVER] Agente humano tomó control de {client_number} con palabra clave")
-                    
-                    return jsonify({"ok": True, "human_intervention": True}), 200
                 
-                # Si no es la palabra clave, ignorar mensaje normal del agente
-                return jsonify({"ok": True, "skip": "fromMe"}), 200
+                # Crear datos del mensaje para should_change_to_human_state
+                message_data = {
+                    'fromMe': True,
+                    'text': agent_text or "",
+                    'id': msg_id
+                }
+                
+                # Verificar si debe cambiar a estado HUMANO
+                should_change, reason = should_change_to_human_state(client_number, message_data)
+                
+                if should_change:
+                    print(f"[HUMAN TAKEOVER] {reason} en chat {client_number}")
+                    
+                    # Cambiar estado a HUMANO en Redis
+                    success = set_conversation_state(client_number, STATE_HUMANO, reason)
+                    if success:
+                        print(f"[REDIS] Estado cambiado a HUMANO para {client_number}")
+                    else:
+                        print(f"[REDIS ERROR] No se pudo cambiar estado para {client_number}")
+                    
+                    return jsonify({"ok": True, "human_intervention": True, "reason": reason}), 200
+                
+                # Si no es intervención humana, ignorar (eco del bot u otro mensaje)
+                return jsonify({"ok": True, "skip": "fromMe_no_intervention"}), 200
 
             remote_jid = key.get("remoteJid") or msg.get("from") or payload.get("sender") or ""
             sender_number = _jid_to_number(str(remote_jid).split(":")[0])
@@ -504,9 +555,44 @@ def webhook():
             if not text_in:
                 return jsonify({"ok": True, "skip": "no-text"}), 200
 
-            # Encolar procesamiento en background para responder sin bloquear el webhook
+            # Verificar estado actual de la conversación
+            current_state = get_conversation_state(sender_number)
+            print(f"[REDIS STATE] {sender_number} -> {current_state}")
+            
+            if current_state == STATE_HUMANO:
+                # Si está en estado HUMANO, el bot debe permanecer en silencio
+                print(f"[BOT SILENT] Chat {sender_number} está en estado HUMANO - bot en silencio")
+                
+                # Actualizar última actividad para evitar reactivación prematura
+                update_last_activity(sender_number)
+                
+                return jsonify({"ok": True, "skip": "human_state"}), 200
+            
+            # Si está en estado BOT, verificar si el cliente solicita agente
+            message_data = {
+                'fromMe': False,
+                'text': text_in,
+                'id': key.get("id", "")
+            }
+            
+            should_change, reason = should_change_to_human_state(sender_number, message_data)
+            
+            if should_change:
+                print(f"[CLIENT REQUEST] {reason} en chat {sender_number}")
+                
+                # Cambiar estado a HUMANO en Redis
+                success = set_conversation_state(sender_number, STATE_HUMANO, reason)
+                if success:
+                    print(f"[REDIS] Estado cambiado a HUMANO para {sender_number}")
+                
+                # El bot responderá con mensaje de conexión y luego se silenciará
+                EXECUTOR.submit(handle_message_async, sender_number, text_in)
+                print(f"[ENQUEUED] agent connection task for {sender_number}")
+                return jsonify({"ok": True, "connecting_agent": True}), 200
+
+            # Estado BOT normal - procesar mensaje
             EXECUTOR.submit(handle_message_async, sender_number, text_in)
-            print(f"[ENQUEUED] reply task for {sender_number}")
+            print(f"[ENQUEUED] bot reply task for {sender_number}")
 
         elif event in ("QRCODE_UPDATED", "CONNECTION_UPDATE"):
             print("[EVOLUTION]", event, payload.get("data"))

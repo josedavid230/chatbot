@@ -12,6 +12,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain, create_history_aware_retriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage, HumanMessage
+from redis_state import set_conversation_state_from_bot, get_conversation_state_from_bot, STATE_HUMANO
 
 # Cargar variables de entorno. Asegúrate de tener un archivo .env con tu OPENAI_API_KEY
 load_dotenv(override=True)
@@ -36,11 +37,12 @@ class ConversationState:
 
 # --- Lógica del Chatbot ---
 class Chatbot:
-    def __init__(self, vectorstore):
+    def __init__(self, vectorstore, chat_id=None):
         self.state = ConversationState.AWAITING_GREETING
         self.user_data = {}
         self.user_data['name'] = "" # Se inicializa el nombre del usuario
         self.chat_history = []
+        self.chat_id = chat_id  # Identificador del chat para Redis
         self.llm = ChatOpenAI(model_name=OPENAI_MODEL, max_tokens=500, temperature=0.1)
         
         system_prompt = """
@@ -293,8 +295,17 @@ class Chatbot:
                 self.state != ConversationState.AWAITING_ROLE_INPUT):
                 # Agregar el mensaje del usuario al historial antes de responder
                 self.chat_history.append(HumanMessage(content=user_input))
-                response = "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal."
+                response = "Te conecto con un agente humano inmediatamente. Un agente de ventas te contactará en este mismo canal."
                 self.chat_history.append(AIMessage(content=response))
+                
+                # Cambiar estado a HUMANO en Redis si tenemos chat_id
+                if self.chat_id:
+                    success = set_conversation_state_from_bot(self.chat_id, STATE_HUMANO, "CLIENTE_SOLICITA_AGENTE")
+                    if success:
+                        print(f"[BOT->REDIS] Estado cambiado a HUMANO para {self.chat_id}")
+                    else:
+                        print(f"[BOT->REDIS ERROR] No se pudo cambiar estado para {self.chat_id}")
+                
                 return response
             
             # SEGUNDA PRIORIDAD: Detectar solicitudes de agendamiento
