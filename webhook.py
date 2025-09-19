@@ -46,6 +46,8 @@ REDIS_SSL = os.getenv('REDIS_SSL', 'true').lower() == 'true'
 # Configuración de tiempos
 INACTIVITY_TIMEOUT_HOURS = 1  # Tiempo para reactivar bot automáticamente
 BOT_SENT_MESSAGE_IDS = set()  # Para detectar ecos del bot
+BOT_SENT_MESSAGES_TIMING = {}  # Timestamp de mensajes del bot para detección por tiempo
+BOT_SENT_MESSAGES_CONTENT = {}  # Contenido de mensajes del bot para detección por contenido
 
 # Conexión Redis
 def get_redis_connection():
@@ -151,22 +153,89 @@ def update_last_activity(chat_id: str):
         print(f"[REDIS ERROR] Error actualizando actividad para {chat_id}: {e}")
         return False
 
+def add_bot_message_info(message_id: str = None, content: str = "", sender_number: str = ""):
+    """
+    Agrega información de mensaje enviado por el bot para detección múltiple.
+    """
+    current_time = time.time()
+    
+    # Estrategia 1: Por ID (si está disponible)
+    if message_id:
+        BOT_SENT_MESSAGE_IDS.add(message_id)
+        # Mantener solo los últimos 100 IDs
+        if len(BOT_SENT_MESSAGE_IDS) > 100:
+            BOT_SENT_MESSAGE_IDS.pop()
+    
+    # Estrategia 2: Por timing (ventana de tiempo)
+    if sender_number:
+        BOT_SENT_MESSAGES_TIMING[sender_number] = current_time
+        # Limpiar entradas antiguas (más de 30 segundos)
+        cutoff_time = current_time - 30
+        BOT_SENT_MESSAGES_TIMING = {k: v for k, v in BOT_SENT_MESSAGES_TIMING.items() if v > cutoff_time}
+    
+    # Estrategia 3: Por contenido (hash del mensaje)
+    if content and sender_number:
+        content_hash = hash(content.strip().lower()[:100])  # Primeros 100 chars
+        BOT_SENT_MESSAGES_CONTENT[f"{sender_number}:{content_hash}"] = current_time
+        # Limpiar entradas antiguas (más de 30 segundos)
+        cutoff_time = current_time - 30
+        BOT_SENT_MESSAGES_CONTENT = {k: v for k, v in BOT_SENT_MESSAGES_CONTENT.items() if v > cutoff_time}
+
 def add_bot_message_id(message_id: str):
     """
-    Agrega ID de mensaje enviado por el bot para detectar ecos.
+    Función legacy - wrapper para compatibilidad.
     """
-    BOT_SENT_MESSAGE_IDS.add(message_id)
-    # Mantener solo los últimos 100 IDs para evitar memoria excesiva
-    if len(BOT_SENT_MESSAGE_IDS) > 100:
-        BOT_SENT_MESSAGE_IDS.pop()
+    add_bot_message_info(message_id=message_id)
 
-def is_bot_message_echo(message_id: str) -> bool:
+def is_bot_message_echo(message_id: str, chat_id: str = "", content: str = "") -> bool:
     """
-    Verifica si un mensaje fromMe es un eco del bot.
+    Verifica si un mensaje fromMe es un eco del bot usando múltiples estrategias robustas.
     """
-    if message_id in BOT_SENT_MESSAGE_IDS:
+    current_time = time.time()
+    
+    # Estrategia 1: Verificación por ID (método principal)
+    if message_id and message_id in BOT_SENT_MESSAGE_IDS:
         BOT_SENT_MESSAGE_IDS.remove(message_id)
+        print(f"[ECHO DETECTION] ✅ ID {message_id} confirmado como eco del bot (Estrategia ID)")
         return True
+    
+    # Estrategia 2: Verificación por timing (el bot envió un mensaje recientemente a este chat)
+    if chat_id and chat_id in BOT_SENT_MESSAGES_TIMING:
+        time_diff = current_time - BOT_SENT_MESSAGES_TIMING[chat_id]
+        if time_diff <= 10:  # Ventana de 10 segundos
+            print(f"[ECHO DETECTION] ✅ Timing coincide para {chat_id} (hace {time_diff:.1f}s) - Estrategia Timing")
+            # Remover para evitar reutilización
+            del BOT_SENT_MESSAGES_TIMING[chat_id]
+            return True
+    
+    # Estrategia 3: Verificación por contenido (hash del mensaje)
+    if content and chat_id:
+        content_hash = hash(content.strip().lower()[:100])
+        content_key = f"{chat_id}:{content_hash}"
+        if content_key in BOT_SENT_MESSAGES_CONTENT:
+            time_diff = current_time - BOT_SENT_MESSAGES_CONTENT[content_key]
+            if time_diff <= 10:  # Ventana de 10 segundos
+                print(f"[ECHO DETECTION] ✅ Contenido coincide para {chat_id} (hace {time_diff:.1f}s) - Estrategia Contenido")
+                # Remover para evitar reutilización
+                del BOT_SENT_MESSAGES_CONTENT[content_key]
+                return True
+    
+    # Estrategia 4: Verificación por estado Redis (si el chat está en estado BOT, es probable que sea eco)
+    try:
+        conversation_state = get_conversation_state(chat_id)
+        if conversation_state == STATE_BOT and chat_id:
+            # Si está en estado BOT y recibimos un fromMe, muy probablemente es eco del bot
+            recent_timing = chat_id in BOT_SENT_MESSAGES_TIMING and (current_time - BOT_SENT_MESSAGES_TIMING[chat_id]) <= 30
+            if recent_timing:
+                print(f"[ECHO DETECTION] ✅ Estado BOT + timing reciente para {chat_id} - Estrategia Estado")
+                return True
+    except:
+        pass
+    
+    print(f"[ECHO DETECTION] ❌ NO es eco del bot confirmado")
+    print(f"[ECHO DETECTION] ID: {message_id}, Chat: {chat_id}, Contenido: {content[:50]}...")
+    print(f"[ECHO DETECTION] IDs conocidos: {list(BOT_SENT_MESSAGE_IDS)}")
+    print(f"[ECHO DETECTION] Timings: {BOT_SENT_MESSAGES_TIMING}")
     return False
 
 def should_change_to_human_state(chat_id: str, message_data: dict) -> tuple[bool, str]:
@@ -181,8 +250,19 @@ def should_change_to_human_state(chat_id: str, message_data: dict) -> tuple[bool
     # Caso 1: Mensaje fromMe que no es eco del bot (agente interviene)
     if message_data.get('fromMe', False):
         msg_id = message_data.get('id', '')
-        if not is_bot_message_echo(msg_id):
+        print(f"[HUMAN DETECTION] Verificando mensaje fromMe. ID: {msg_id}")
+        print(f"[HUMAN DETECTION] IDs del bot en memoria: {list(BOT_SENT_MESSAGE_IDS)}")
+        
+        # Extraer contenido y chat_id para detección robusta
+        agent_text = message_data.get('text', '')
+        is_echo = is_bot_message_echo(msg_id, chat_id, agent_text)
+        print(f"[HUMAN DETECTION] ¿Es eco del bot? {is_echo}")
+        
+        if not is_echo:
+            print(f"[HUMAN DETECTION] ❌ NO es eco del bot → DETECTANDO AGENTE_INTERVIENE")
             reasons.append("AGENTE_INTERVIENE")
+        else:
+            print(f"[HUMAN DETECTION] ✅ ES eco del bot → Ignorando mensaje")
     
     # CASO 2 ELIMINADO: Los clientes (fromMe=false) NO activan intervención humana aquí
     # La detección de "agente" en mensajes de cliente se maneja SOLO en main.py
@@ -384,20 +464,43 @@ def handle_message_async(sender_number: str, text_in: str) -> None:
     status, body = send_whatsapp_text(sender_number, reply_text)
     print(f"[SEND (bg)] -> {sender_number} [{status}] {body}")
     
-    # Si el envío fue exitoso, agregar ID del mensaje para detectar ecos
+    # Registrar información del mensaje del bot para detección robusta
     if status in (200, 201):
         try:
-            # Extraer ID del mensaje de la respuesta si está disponible
+            # Estrategia principal: Extraer ID del mensaje de la respuesta
             import json
             response_data = json.loads(body)
+            print(f"[BOT MSG DEBUG] Response body structure: {body[:200]}...")
+            
+            msg_id = None
             if isinstance(response_data, dict) and 'key' in response_data:
                 msg_id = response_data['key'].get('id')
                 if msg_id:
-                    add_bot_message_id(msg_id)
-                    print(f"[BOT MSG ID] Agregado para eco: {msg_id}")
-        except:
-            # Si no se puede extraer el ID, no es crítico
-            pass
+                    print(f"[BOT MSG ID] ✅ ID extraído: {msg_id}")
+                else:
+                    print(f"[BOT MSG ID] ⚠️ No se encontró 'id' en key: {response_data.get('key')}")
+            else:
+                print(f"[BOT MSG ID] ⚠️ Estructura inesperada. Keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'No es dict'}")
+            
+            # Registrar con estrategias múltiples (ID + timing + contenido)
+            add_bot_message_info(
+                message_id=msg_id,
+                content=reply_text,
+                sender_number=sender_number
+            )
+            print(f"[BOT MSG] ✅ Información registrada para detección robusta")
+                
+        except Exception as e:
+            print(f"[BOT MSG ID] ❌ Error extrayendo ID: {e}")
+            print(f"[BOT MSG ID] Body problemático: {body}")
+            # Aún registrar timing y contenido aunque falle la extracción de ID
+            add_bot_message_info(
+                content=reply_text,
+                sender_number=sender_number
+            )
+    else:
+        print(f"[BOT MSG ID] ❌ Envío falló con status {status}, no se puede extraer ID")
+        # No registrar nada si el envío falló
 
 
 def handle_message_async_with_remote(sender_number: str, text_in: str, remote_jid: str | None) -> None:

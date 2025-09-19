@@ -43,6 +43,11 @@ class Chatbot:
         self.user_data['name'] = "" # Se inicializa el nombre del usuario
         self.chat_history = []
         self.chat_id = chat_id  # Identificador del chat para Redis
+        # Sistema de memoria para confirmaciones de pasos
+        self.confirmed_steps = {
+            'paso1': False,  # Formulario completado
+            'paso3': False   # Pago realizado
+        }
         self.llm = ChatOpenAI(model_name=OPENAI_MODEL, max_tokens=500, temperature=0.1)
         
         system_prompt = """
@@ -351,19 +356,43 @@ class Chatbot:
             return any(keyword in user_input.lower() for keyword in service_keywords)
 
     def _detect_scheduling_request(self, user_input: str) -> bool:
-        """Detecta si el usuario quiere agendar una cita o sesión."""
-        scheduling_keywords = [
-            'agendar', 'agenda', 'agendo', 'sesión', 'sesion', 'cita', 'reunión', 'reunion',
-            'calendario', 'hora', 'horario', 'cuando', 'cuándo', 'disponible', 'disponibilidad',
-            'programar', 'programa', 'appointment', 'meeting', 'schedule', 'virtual',
-            'asesoría', 'asesoria', 'consulta', 'mentoria', 'mentoría',
-            'Agendar', 'Agenda', 'Agendo', 'Sesión', 'Sesion', 'Cita', 'Reunión', 'Reunion',
-            'Calendario', 'Hora', 'Horario', 'Cuando', 'Cuándo', 'Disponible', 'Disponibilidad',
-            'Programar', 'Programa', 'Appointment', 'Meeting', 'Schedule', 'Virtual',
-            'Asesoría', 'Asesoria', 'Consulta', 'Mentoria', 'Mentoría'
-        ]
-        text_lower = user_input.lower().strip()
-        return any(keyword in text_lower for keyword in scheduling_keywords)
+        """Usa LLM para detectar si el usuario quiere agendar una cita o sesión."""
+        try:
+            prompt = f"""
+            Analiza si el siguiente mensaje del usuario indica que quiere AGENDAR, PROGRAMAR o SOLICITAR una cita, sesión, reunión o consulta.
+
+            MENSAJE DEL USUARIO: "{user_input}"
+
+            ¿El usuario está intentando agendar o programar algo?
+
+            Responde ÚNICAMENTE:
+            - "SÍ" si claramente quiere agendar, programar o solicitar una cita/sesión
+            - "NO" si solo está preguntando sobre horarios, precios, o haciendo consultas generales
+
+            Ejemplos:
+            - "agenda" → SÍ
+            - "Quiero agendar una cita" → SÍ
+            - "¿Cuándo puedo programar?" → SÍ
+            - "Disponibilidad para sesión" → SÍ
+            - "¿A qué hora trabajan?" → NO (solo pregunta horarios)
+            - "¿Cuánto cuesta la consulta?" → NO (pregunta precio)
+            - "¿Qué incluye la sesión?" → NO (pregunta información)
+            """
+            
+            response = self.llm.invoke(prompt).content.strip().upper()
+            
+            if "SÍ" in response or "SI" in response:
+                print(f"[DEBUG] LLM detectó solicitud de agendamiento: {response}")
+                return True
+            else:
+                print(f"[DEBUG] LLM NO detectó solicitud de agendamiento: {response}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Error en _detect_scheduling_request: {e}")
+            # Fallback a detección básica por keywords críticas
+            scheduling_keywords = ['agendar', 'agenda', 'agendo', 'programar', 'cita', 'sesión', 'reunión']
+            return any(keyword in user_input.lower() for keyword in scheduling_keywords)
     
     def _provide_calendar_link(self) -> str:
         """Proporciona el enlace del calendario para agendar citas."""
@@ -528,7 +557,7 @@ class Chatbot:
                     return mx_answer
 
                 user_role = self.user_data.get('role', 'táctico')
-                
+
                 query = (
                     f"""
                     Usa EXCLUSIVAMENTE el contexto de tu conocimiento confirmado para responder, excepto en la política de precios indicada abajo.
@@ -558,7 +587,7 @@ class Chatbot:
                     - Para otros servicios: busca en tu base de conocimiento los precios específicos para nivel estratégico
                     
                     El usuario está clasificado como nivel {user_role.upper()}. Busca los precios correspondientes a este nivel en tu base de conocimiento, excepto para los dos servicios con precio fijo mencionados arriba.
-
+                  
                     Formato de salida (en español, claro y consistente). Sigue estos encabezados en este orden, en texto plano:
                     
                     Servicio o servicios escogidos: <lista breve de los servicios tal como aparecen en el contexto>
@@ -604,36 +633,80 @@ class Chatbot:
                         return response_text
                 
             elif self.state == ConversationState.PROVIDING_INFO:
-                # PRIORIDAD: Detectar confirmación de pasos 1 y 3 para enviar calendario
+                # PRIORIDAD: Detectar confirmación de pasos 1 y 3 usando memoria persistente
                 payment_status = self._detect_payment_confirmation(user_input)
-                if payment_status['both_confirmed']:
+                
+                # Actualizar memoria de confirmaciones
+                if payment_status['paso1']:
+                    self.confirmed_steps['paso1'] = True
+                    print(f"[DEBUG] Actualizando memoria: Paso 1 confirmado")
+                
+                if payment_status['paso3']:
+                    self.confirmed_steps['paso3'] = True
+                    print(f"[DEBUG] Actualizando memoria: Paso 3 confirmado")
+                
+                # Verificar si ambos pasos están confirmados (usando memoria)
+                if self.confirmed_steps['paso1'] and self.confirmed_steps['paso3']:
                     response_text = self._send_calendar_for_confirmed_payment()
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
                 
-                # Detectar confirmación individual de pasos para dar retroalimentación
-                elif payment_status['paso1'] and not payment_status['paso3']:
+                # Manejo de confirmaciones individuales usando memoria
+                elif payment_status['paso1'] and not self.confirmed_steps['paso3']:
                     response_text = (
                         "¡Confirmado! ✅ Has completado el formulario (paso 1).\n\n"
-                        "Ahora te falta completar el paso 3 (realizar el pago) para poder agendar tu sesión virtual.\n\n"
-                        "Una vez realices el pago, confírmalo escribiendo algo como:\n"
+                        "Ahora te falta completar el paso 3 (realizar Y COMPLETAR el pago/transferencia) para poder agendar tu sesión virtual.\n\n"
+                        "⚠️ **IMPORTANTE:** Solo confírmalo cuando YA hayas terminado de hacer el pago completamente.\n\n"
+                        "✅ **Confirma SOLO cuando hayas completado el pago:**\n"
                         "• 'Realicé el pago'\n"
                         "• 'Ya pagué'\n"
-                        "• 'Pago listo'\n\n"
-                        "Y te enviaré inmediatamente el link del calendario. 😊"
+                        "• 'Terminé la transferencia'\n"
+                        "• 'Pago completado'\n\n"
+                        "❌ **NO confirmes si solo vas a pagar o tienes preguntas.**\n\n"
+                        "Una vez COMPLETADO el pago, confírmalo y te enviaré inmediatamente el link del calendario. 😊"
                     )
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
                 
-                elif payment_status['paso3'] and not payment_status['paso1']:
+                elif payment_status['paso3'] and not self.confirmed_steps['paso1']:
                     response_text = (
                         "¡Confirmado! ✅ Has completado el pago (paso 3).\n\n"
-                        "Ahora te falta completar el paso 1 (llenar el formulario) para poder agendar tu sesión virtual.\n\n"
-                        "Una vez completes el formulario, confírmalo escribiendo algo como:\n"
+                        "Ahora te falta completar el paso 1 (llenar Y ENVIAR completamente el formulario) para poder agendar tu sesión virtual.\n\n"
+                        "⚠️ **IMPORTANTE:** Solo confírmalo cuando YA hayas terminado de llenar y enviar el formulario.\n\n"
+                        "✅ **Confirma SOLO cuando hayas completado el formulario:**\n"
                         "• 'Completé el formulario'\n"
                         "• 'Ya llené el formulario'\n"
-                        "• 'Formulario listo'\n\n"
-                        "Y te enviaré inmediatamente el link del calendario. 😊"
+                        "• 'Envié el formulario'\n"
+                        "• 'Formulario terminado'\n\n"
+                        "❌ **NO confirmes si solo vas a llenarlo o tienes preguntas.**\n\n"
+                        "Una vez COMPLETADO el formulario, confírmalo y te enviaré inmediatamente el link del calendario. 😊"
+                    )
+                    self.chat_history.append(AIMessage(content=response_text))
+                    return response_text
+                
+                # Si ya confirmó pasos previamente, recordárselo
+                elif (self.confirmed_steps['paso1'] and not payment_status['paso3'] and 
+                      not self.confirmed_steps['paso3']):
+                    response_text = (
+                        "Recuerda que ya confirmaste el formulario ✅\n\n"
+                        "Solo falta que confirmes el PAGO cuando ya lo hayas completado:\n"
+                        "• 'Realicé el pago'\n"
+                        "• 'Ya pagué'\n"
+                        "• 'Pago completado'\n\n"
+                        "Una vez confirmes el pago, te envío el calendario inmediatamente. 😊"
+                    )
+                    self.chat_history.append(AIMessage(content=response_text))
+                    return response_text
+                    
+                elif (self.confirmed_steps['paso3'] and not payment_status['paso1'] and 
+                      not self.confirmed_steps['paso1']):
+                    response_text = (
+                        "Recuerda que ya confirmaste el pago ✅\n\n"
+                        "Solo falta que confirmes el FORMULARIO cuando ya lo hayas completado:\n"
+                        "• 'Completé el formulario'\n"
+                        "• 'Ya llené el formulario'\n"
+                        "• 'Formulario terminado'\n\n"
+                        "Una vez confirmes el formulario, te envío el calendario inmediatamente. 😊"
                     )
                     self.chat_history.append(AIMessage(content=response_text))
                     return response_text
@@ -641,18 +714,8 @@ class Chatbot:
                 # Opción específica SOLO para cuando el usuario explícitamente quiere ver la lista completa
                 text_l = (user_input or "").strip().lower()
                 
-                # Frases más específicas que realmente indican que quiere ver todos los servicios
-                show_services_phrases = [
-                    "mostrar servicios", "ver servicios", "lista de servicios", "todos los servicios",
-                    "que servicios tienen", "cuales servicios", "opciones disponibles", 
-                    "mostrar opciones", "ver opciones", "lista completa",
-                    "Mostrar servicios", "Ver servicios", "Lista de servicios", "Todos los servicios",
-                    "Que servicios tienen", "Cuales servicios", "Opciones disponibles", 
-                    "Mostrar opciones", "Ver opciones", "Lista completa"
-                ]
-                
-                # Solo activar la plantilla si es muy específico
-                if any(phrase in text_l for phrase in show_services_phrases):
+                # Usar LLM para detectar si quiere ver la lista de servicios
+                if self._wants_to_see_services_list(user_input):
                     response_text = (
                         "Perfecto, sigamos. Te recuerdo nuestros servicios disponibles:\n\n"
                         "1. Optimización de Hoja de Vida (ATS)\n"
@@ -684,48 +747,78 @@ class Chatbot:
             return self._continue_conversation(str(user_input), guidance)
 
     def _detect_payment_confirmation(self, user_input: str) -> dict:
-        """Detecta si el usuario confirma el paso 1 (formulario) y/o paso 3 (pago)."""
-        text_lower = user_input.lower().strip()
-        
-        # Palabras clave para confirmar paso 1 (formulario) - en minúsculas y mayúsculas
-        paso1_keywords = [
-            'completé el formulario', 'llené el formulario', 'formulario listo', 
-            'formulario completo', 'ya llené', 'ya completé', 'paso 1 listo',
-            'paso uno listo', 'formulario enviado', 'envié el formulario', 'listo paso uno',
-            'listo paso 1', 'confirmo paso 1', 'confirmo paso uno', 'complete el formulario',
-            'complete formulario', 'llene el formulario', 'llene formulario', 'hice el formulario',
-            'rellené el formulario', 'terminé el formulario', 'finalicé el formulario',
-            'Completé el formulario', 'Llené el formulario', 'Formulario listo', 
-            'Formulario completo', 'Ya llené', 'Ya completé', 'Paso 1 listo',
-            'Paso uno listo', 'Formulario enviado', 'Envié el formulario', 'Listo paso uno',
-            'Listo paso 1', 'Confirmo paso 1', 'Confirmo paso uno', 'Complete el formulario',
-            'Complete formulario', 'Llene el formulario', 'Llene formulario', 'Hice el formulario',
-            'Rellené el formulario', 'Terminé el formulario', 'Finalicé el formulario'
-        ]
-        
-        # Palabras clave para confirmar paso 3 (pago) - en minúsculas y mayúsculas
-        paso3_keywords = [
-            'realicé el pago', 'hice el pago', 'pago realizado', 'pago listo',
-            'ya pagué', 'pagué', 'transferencia realizada', 'paso 3 listo',
-            'paso tres listo', 'pago confirmado', 'envié el pago', 'realize el pago',
-            'hice transferencia', 'transferí', 'pague', 'efectué el pago', 'pagado',
-            'pago hecho', 'transferencia lista', 'confirmé el pago', 'pago enviado',
-            'Realicé el pago', 'Hice el pago', 'Pago realizado', 'Pago listo',
-            'Ya pagué', 'Pagué', 'Transferencia realizada', 'Paso 3 listo',
-            'Paso tres listo', 'Pago confirmado', 'Envié el pago', 'Realize el pago',
-            'Hice transferencia', 'Transferí', 'Pague', 'Efectué el pago', 'Pagado',
-            'Pago hecho', 'Transferencia lista', 'Confirmé el pago', 'Pago enviado'
-        ]
-        
-        # Detectar confirmaciones
-        paso1_confirmed = any(keyword in text_lower for keyword in paso1_keywords)
-        paso3_confirmed = any(keyword in text_lower for keyword in paso3_keywords)
-        
-        return {
-            'paso1': paso1_confirmed,
-            'paso3': paso3_confirmed,
-            'both_confirmed': paso1_confirmed and paso3_confirmed
-        }
+        """Usa LLM para detectar si el usuario REALMENTE confirma haber completado el formulario y/o realizado el pago."""
+        try:
+            prompt = f"""
+            Analiza MUY CUIDADOSAMENTE si el usuario está CONFIRMANDO COMPLETAMENTE haber realizado estas acciones específicas:
+
+            PASO 1: LLENAR Y ENVIAR completamente un formulario de Google Forms
+            PASO 3: REALIZAR Y COMPLETAR un pago/transferencia bancaria
+
+            MENSAJE DEL USUARIO: "{user_input}"
+
+            CRITERIOS ESTRICTOS:
+            
+            Para PASO1=SÍ (formulario):
+            - Debe confirmar que YA llenó/completó/envió/terminó el formulario
+            - Debe usar verbos de completitud: "completé", "llené", "envié", "terminé", "ya hice"
+            - NO confirmar si solo dice "voy a llenar", "necesito llenar", "¿cómo lleno?"
+            
+            Para PASO3=SÍ (pago):
+            - Debe confirmar que YA realizó/hizo/envió/completó el pago/transferencia
+            - Debe usar verbos de completitud: "realicé", "pagué", "transferí", "ya hice", "envié"
+            - NO confirmar si solo dice "voy a pagar", "necesito pagar", "¿cómo pago?"
+
+            Responde en formato exacto:
+            PASO1: SÍ/NO
+            PASO3: SÍ/NO
+
+            Ejemplos CORRECTOS:
+            - "Ya completé el formulario" → PASO1: SÍ, PASO3: NO
+            - "Realicé el pago" → PASO1: NO, PASO3: SÍ
+            - "Terminé el formulario y pagué" → PASO1: SÍ, PASO3: SÍ
+            - "Listo, envié el formulario" → PASO1: SÍ, PASO3: NO
+
+            Ejemplos INCORRECTOS (NO confirmar):
+            - "Voy a llenar el formulario" → PASO1: NO, PASO3: NO (futuro, no completado)
+            - "¿Cómo pago?" → PASO1: NO, PASO3: NO (pregunta, no confirmación)
+            - "Necesito hacer el pago" → PASO1: NO, PASO3: NO (necesidad, no completitud)
+            - "El formulario está difícil" → PASO1: NO, PASO3: NO (comentario, no confirmación)
+            - "¿Dónde está el formulario?" → PASO1: NO, PASO3: NO (pregunta ubicación)
+            """
+            
+            response = self.llm.invoke(prompt).content.strip().upper()
+            print(f"[DEBUG] LLM respuesta ESTRICTA de confirmación: {response}")
+            
+            # Extraer respuestas
+            paso1_confirmed = "PASO1: SÍ" in response or "PASO1: SI" in response
+            paso3_confirmed = "PASO3: SÍ" in response or "PASO3: SI" in response
+            
+            print(f"[DEBUG] Confirmaciones ESTRICTAS detectadas - Paso1: {paso1_confirmed}, Paso3: {paso3_confirmed}")
+            
+            return {
+                'paso1': paso1_confirmed,
+                'paso3': paso3_confirmed,
+                'both_confirmed': paso1_confirmed and paso3_confirmed
+            }
+                
+        except Exception as e:
+            print(f"[ERROR] Error en _detect_payment_confirmation: {e}")
+            # Fallback MÁS ESTRICTO con keywords de completitud únicamente
+            text_lower = user_input.lower().strip()
+            
+            # Solo keywords que indican COMPLETITUD, no intención
+            paso1_keywords = ['completé el formulario', 'llené el formulario', 'envié el formulario', 'terminé el formulario', 'formulario listo', 'formulario enviado']
+            paso3_keywords = ['realicé el pago', 'hice el pago', 'pagué', 'transferí', 'pago listo', 'pago realizado', 'ya pagué']
+            
+            paso1_confirmed = any(keyword in text_lower for keyword in paso1_keywords)
+            paso3_confirmed = any(keyword in text_lower for keyword in paso3_keywords)
+            
+            return {
+                'paso1': paso1_confirmed,
+                'paso3': paso3_confirmed,
+                'both_confirmed': paso1_confirmed and paso3_confirmed
+            }
     
     def _send_calendar_for_confirmed_payment(self) -> str:
         """Envía el link del calendario cuando se confirman ambos pasos."""
@@ -736,34 +829,123 @@ class Chatbot:
             f"Elige el día y horario que mejor te convenga. Una vez agendado, recibirás los detalles de confirmación.\n\n"
             f"¡Estamos listos para acompañarte en este proceso! 😊"
         )
-    
+
+    def _reset_confirmation_memory(self):
+        """Resetea la memoria de confirmaciones de pasos."""
+        self.confirmed_steps = {
+            'paso1': False,
+            'paso3': False
+        }
+        print(f"[DEBUG] Memoria de confirmaciones reseteada")
+
+    def _get_confirmation_status_summary(self) -> str:
+        """Retorna un resumen del estado actual de confirmaciones."""
+        status_paso1 = "✅" if self.confirmed_steps['paso1'] else "⏳"
+        status_paso3 = "✅" if self.confirmed_steps['paso3'] else "⏳"
+        return f"Estado: Formulario {status_paso1} | Pago {status_paso3}"
+
+    def _wants_to_see_services_list(self, user_input: str) -> bool:
+        """Usa LLM para detectar si el usuario quiere ver la lista completa de servicios."""
+        try:
+            prompt = f"""
+            Analiza si el siguiente mensaje del usuario indica que quiere VER, MOSTRAR o CONOCER la lista completa de servicios disponibles.
+
+            MENSAJE DEL USUARIO: "{user_input}"
+
+            ¿El usuario está pidiendo específicamente ver la lista de servicios disponibles?
+
+            Responde ÚNICAMENTE:
+            - "SÍ" si claramente quiere ver/mostrar/conocer todos los servicios o la lista completa
+            - "NO" si pregunta sobre un servicio específico, precio, o hace otra consulta
+
+            Ejemplos:
+            - "Mostrar servicios" → SÍ
+            - "¿Qué servicios tienen?" → SÍ
+            - "Lista completa" → SÍ
+            - "Ver opciones disponibles" → SÍ
+            - "¿Cuánto cuesta la hoja de vida?" → NO (pregunta específica)
+            - "Quiero el método X" → NO (selección específica)
+            - "¿Cómo funciona?" → NO (pregunta general)
+            """
+            
+            response = self.llm.invoke(prompt).content.strip().upper()
+            
+            if "SÍ" in response or "SI" in response:
+                print(f"[DEBUG] LLM detectó solicitud de lista de servicios: {response}")
+                return True
+            else:
+                print(f"[DEBUG] LLM NO detectó solicitud de lista de servicios: {response}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Error en _wants_to_see_services_list: {e}")
+            # Fallback a detección básica por keywords
+            service_list_keywords = ['mostrar servicios', 'ver servicios', 'lista de servicios', 'que servicios', 'opciones disponibles']
+            return any(keyword in user_input.lower() for keyword in service_list_keywords)
+
     def _is_payment_related_query(self, user_input: str) -> bool:
-        """Detecta si el usuario está haciendo una consulta relacionada con pagos/pasos pero no confirmando."""
-        text_lower = user_input.lower().strip()
-        
-        # Palabras que indican que está preguntando sobre los pasos pero no confirmando
-        query_keywords = [
-            'formulario', 'pago', 'paso', 'transferencia', 'banco', 'cuenta',
-            'cómo pago', 'donde pago', 'cuánto cuesta', 'precio', 'valor',
-            'información', 'datos', 'llenar', 'completar', 'enviar',
-            'Formulario', 'Pago', 'Paso', 'Transferencia', 'Banco', 'Cuenta',
-            'Cómo pago', 'Donde pago', 'Cuánto cuesta', 'Precio', 'Valor',
-            'Información', 'Datos', 'Llenar', 'Completar', 'Enviar'
-        ]
-        
-        return any(keyword in text_lower for keyword in query_keywords)
+        """Usa LLM para detectar si el usuario está haciendo consultas sobre pagos/pasos pero no confirmando."""
+        try:
+            prompt = f"""
+            Analiza si el siguiente mensaje del usuario está haciendo una CONSULTA o PREGUNTA sobre:
+            - Formularios, pasos, pagos, transferencias
+            - Información sobre cómo pagar, dónde pagar, precios
+            - Datos bancarios, cuentas, métodos de pago
+            - Proceso de completar formularios
+
+            Pero NO está confirmando haber completado algo.
+
+            MENSAJE DEL USUARIO: "{user_input}"
+
+            ¿Es una consulta/pregunta sobre temas de pago o formularios (pero no una confirmación)?
+
+            Responde ÚNICAMENTE:
+            - "SÍ" si pregunta sobre pagos/formularios pero no confirma
+            - "NO" si no es relacionado con pagos/formularios, o si está confirmando
+
+            Ejemplos:
+            - "¿Cómo pago?" → SÍ (pregunta sobre pago)
+            - "¿Dónde está el formulario?" → SÍ (pregunta sobre formulario)
+            - "Ya pagué" → NO (es confirmación, no pregunta)
+            - "¿Qué servicios tienen?" → NO (no relacionado con pagos)
+            - "Información sobre precios" → SÍ (pregunta sobre pagos)
+            """
+            
+            response = self.llm.invoke(prompt).content.strip().upper()
+            
+            if "SÍ" in response or "SI" in response:
+                print(f"[DEBUG] LLM detectó consulta de pago: {response}")
+                return True
+            else:
+                print(f"[DEBUG] LLM NO detectó consulta de pago: {response}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Error en _is_payment_related_query: {e}")
+            # Fallback a detección básica por keywords
+            query_keywords = ['formulario', 'pago', 'paso', 'transferencia', 'banco', 'cuenta', 'cómo pago', 'precio']
+            return any(keyword in user_input.lower() for keyword in query_keywords)
     
     def _send_step_clarification_message(self) -> str:
         """Mensaje para clarificar los pasos cuando el usuario no confirma claramente."""
+        # Mostrar estado actual de confirmaciones
+        status_paso1 = "✅ COMPLETADO" if self.confirmed_steps['paso1'] else "⏳ PENDIENTE"
+        status_paso3 = "✅ COMPLETADO" if self.confirmed_steps['paso3'] else "⏳ PENDIENTE"
+        
         return (
-            "Para continuar con tu proceso, necesito que confirmes los pasos completados:\n\n"
-            "📋 **Paso 1:** Llenar formulario\n"
-            "💳 **Paso 3:** Realizar pago\n\n"
-            "Por favor confirma cuáles has completado, ejemplo:\n"
-            "• 'Completé el formulario'\n"
-            "• 'Realicé el pago'\n"
-            "• 'Completé formulario y pago'\n\n"
-            "Si necesitas ayuda personalizada, escribe **'agente'** para comunicarte con un agente de ventas. 👥"
+            f"**ESTADO ACTUAL DE TUS PASOS:**\n"
+            f"📋 **Paso 1 (Formulario):** {status_paso1}\n"
+            f"💳 **Paso 3 (Pago):** {status_paso3}\n\n"
+            f"Para poder enviarte el calendario, necesito que confirmes ÚNICAMENTE cuando hayas COMPLETADO totalmente cada paso:\n\n"
+            f"📋 **Paso 1:** Llenar Y ENVIAR el formulario de Google Forms\n"
+            f"💳 **Paso 3:** Realizar Y COMPLETAR el pago/transferencia\n\n"
+            f"⚠️ **IMPORTANTE:** Solo confirma cuando ya hayas terminado completamente la acción.\n\n"
+            f"✅ **Ejemplos de confirmación válida:**\n"
+            f"• 'Ya completé el formulario'\n"
+            f"• 'Realicé el pago'\n"
+            f"• 'Terminé el formulario y pagué'\n"
+            f"• 'Listo, envié el formulario'\n\n"
+            f"Si necesitas ayuda personalizada, escribe **'agente'** para comunicarte con un agente de ventas. 👥"
         )
 
 
