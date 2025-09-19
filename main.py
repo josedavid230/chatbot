@@ -242,6 +242,114 @@ class Chatbot:
             "Si quieres hablar con un agente, escribe 'agente'."
         )
     
+    def _is_agent_request(self, user_input: str) -> bool:
+        """Detecta si el usuario está solicitando específicamente un agente humano."""
+        text = user_input.lower().strip()
+        words = text.split()
+        
+        # Caso 1: Palabra exacta "agente"
+        if len(words) == 1 and words[0] == 'agente':
+            return True
+            
+        # Caso 2: Frases específicas de solicitud de agente
+        agent_request_phrases = [
+            'Quiero un agente', 'Necesito un agente', 'Conectame con un agente',
+            'Hablar con un agente', 'Contactar un agente', 'Agente humano',
+            'Quiero agente', 'Necesito agente', 'Conectame con agente',
+            'Quiero hablar con un agente', 'Necesito hablar con un agente'
+        ]
+        
+        return any(phrase in text for phrase in agent_request_phrases)
+
+    def _is_natural_conversation_resumption(self, user_input: str) -> bool:
+        """Detecta si el usuario está retomando una conversación de forma natural."""
+        try:
+            prompt = f"""
+            Analiza si el siguiente mensaje parece ser una conversación natural donde alguien está:
+            - Saludando normalmente
+            - Haciendo una pregunta sobre servicios laborales
+            - Retomando una conversación previa
+            - Escribiendo algo natural (no solo números o palabras clave)
+
+            MENSAJE: "{user_input}"
+
+            ¿Este mensaje parece una conversación natural que debería ser respondida normalmente?
+
+            Responde ÚNICAMENTE:
+            - "SÍ" si es conversación natural
+            - "NO" si parece ser respuesta a opciones específicas (1, 2, agente, etc.)
+
+            Ejemplos:
+            - "Hola estoy haciendo pruebas" → SÍ
+            - "¿Qué servicios tienen?" → SÍ
+            - "Me interesa mejorar mi CV" → SÍ
+            - "1" → NO
+            - "agente" → NO
+            - "seguir hablando" → NO
+            """
+            
+            response = self.llm.invoke(prompt).content.strip().upper()
+            
+            if "SÍ" in response or "SI" in response:
+                print(f"[DEBUG] LLM detectó conversación natural: {response}")
+                return True
+            else:
+                print(f"[DEBUG] LLM detectó respuesta específica: {response}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Error en _is_natural_conversation_resumption: {e}")
+            # Fallback: si tiene más de 10 caracteres y no son números, probablemente es natural
+            return len(user_input.strip()) > 10 and not user_input.strip().isdigit()
+
+    def _detect_service_intention(self, user_input: str) -> bool:
+        """Usa LLM para detectar si el usuario quiere seleccionar un servicio específico."""
+        try:
+            prompt = f"""
+            Analiza si el siguiente mensaje del usuario indica que quiere seleccionar UN SERVICIO ESPECÍFICO de esta lista:
+
+            SERVICIOS DISPONIBLES:
+            1. Optimización de Hoja de vida (ATS)
+            2. Mejora de perfil en plataformas de empleo  
+            3. Preparación para Entrevistas
+            4. Estrategia de búsqueda de empleo
+            5. Simulación de entrevista con feedback
+            6. Método X (servicio premium)
+            7. Test EPI - Evaluación de Personalidad Integral
+            8. Todos los servicios
+
+            MENSAJE DEL USUARIO: "{user_input}"
+
+            ¿El usuario está intentando seleccionar un servicio específico de la lista?
+
+            Responde ÚNICAMENTE:
+            - "SÍ" si claramente quiere un servicio específico (números, nombres, o intención clara)
+            - "NO" si es una pregunta general, saludo, o no menciona servicios específicos
+
+            Ejemplos:
+            - "Quiero el 3" → SÍ
+            - "Hoja de vida" → SÍ  
+            - "¿Qué incluye el método X?" → NO (es pregunta, no selección)
+            - "Hola, estoy interesado" → NO (muy general)
+            - "Todos" → SÍ
+            """
+            
+            response = self.llm.invoke(prompt).content.strip().upper()
+            
+            # Si dice SÍ, el usuario quiere seleccionar un servicio
+            if "SÍ" in response or "SI" in response:
+                print(f"[DEBUG] LLM detectó intención de servicio: {response}")
+                return True
+            else:
+                print(f"[DEBUG] LLM NO detectó selección de servicio: {response}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Error en _detect_service_intention: {e}")
+            # Fallback a detección básica por keywords
+            service_keywords = ['1', '2', '3', '4', '5', '6', '7', '8', 'todos', 'todo', 'hoja de vida', 'cv', 'método x', 'metodo x']
+            return any(keyword in user_input.lower() for keyword in service_keywords)
+
     def _detect_scheduling_request(self, user_input: str) -> bool:
         """Detecta si el usuario quiere agendar una cita o sesión."""
         scheduling_keywords = [
@@ -271,7 +379,7 @@ class Chatbot:
         text_lower = user_input.lower().strip()
         
         # Opción 1: Quiere agente humano
-        if any(x in text_lower for x in ["1", "uno", "agente", "humano", "ventas"]):
+        if any(x in text_lower for x in ["1", "uno", "humano", "ventas"]) or self._is_agent_request(user_input):
             return "Perfecto. Te conecto con un agente humano inmediatamente. Pauso este chat y un agente de ventas te contactará en este mismo canal."
         
         # Opción 2: Quiere seguir hablando
@@ -290,8 +398,8 @@ class Chatbot:
     def process_message(self, user_input):
         try:
             # PRIORIDAD MÁXIMA: Detectar solicitud de agente humano ANTES de cualquier procesamiento
-            # EXCEPCIÓN: No detectar "agente" cuando el usuario está describiendo su cargo laboral
-            if (user_input and "agente" in user_input.lower() and 
+            # Solo activar con palabra exacta "agente" o frases específicas de solicitud
+            if (user_input and self._is_agent_request(user_input) and 
                 self.state != ConversationState.AWAITING_ROLE_INPUT):
                 # Agregar el mensaje del usuario al historial antes de responder
                 self.chat_history.append(HumanMessage(content=user_input))
@@ -350,11 +458,9 @@ class Chatbot:
             elif self.state == ConversationState.AWAITING_ROLE_INPUT:
                 role_classification = self._classify_role(user_input)
                 if not role_classification:
-                    print(f"[DEBUG] No se pudo clasificar el rol. Continuando la conversación sin error.")
-                    self.state = ConversationState.AWAITING_CONTINUE_CHOICE
-                    response_text = self._continue_conversation(user_input, "")
-                    self.chat_history.append(AIMessage(content=response_text))
-                    return response_text
+                    print(f"[DEBUG] No se pudo clasificar el rol. Continuando sin clasificación específica.")
+                    # En lugar de ir a _continue_conversation, continuar sin rol específico
+                    role_classification = 'general'  # Rol por defecto
 
                 self.user_data['role'] = role_classification
                 self.state = ConversationState.AWAITING_SERVICE_CHOICE
@@ -385,15 +491,15 @@ class Chatbot:
                 return response_text
 
             elif self.state == ConversationState.AWAITING_SERVICE_CHOICE:
-                service_keywords = ['hoja de vida','Hoja', 'Hoja de vida', 'Optimización', 'Optimización de Hoja de vida', 'ats','Optimización de Hoja de vida (ATS)','Mejora de perfil en plataformas de empleo','Preparación para Entrevistas','Preparacion para Entrevistas','Estrategia de búsqueda de empleo','Estrategia de busqueda de empleo','Simulación de entrevista con feedback','Simulacion de entrevista con feedback','Metodo X','Test EPI','Evaluación de Personalidad Integral','1', '2', '3', '4', '5', '6','7', 'mejora','mejorar','preparación', 'metodo x', 'método x', 'Ats', 'Mejora', 'Mejorar', 'Preparación']
-                is_service_choice = any(keyword in user_input.lower() for keyword in service_keywords)
-
-                if not is_service_choice:
-                    print(f"[DEBUG] No se detectó una selección de servicio. Continuando sin interrumpir.")
-                    self.state = ConversationState.AWAITING_CONTINUE_CHOICE
-                    response_text = self._continue_conversation(user_input, "")
-                    self.chat_history.append(AIMessage(content=response_text))
-                    return response_text
+                # Usar LLM para detectar intención de servicio
+                service_detected = self._detect_service_intention(user_input)
+                
+                if not service_detected:
+                    print(f"[DEBUG] No se detectó intención de servicio específico. Usando RAG para responder.")
+                    # En lugar de ir a _continue_conversation, usar RAG para responder naturalmente
+                    answer = self._safe_rag_answer(user_input)
+                    self.chat_history.append(AIMessage(content=answer))
+                    return answer
 
                 self.user_data['service'] = user_input
                 self.state = ConversationState.PROVIDING_INFO
@@ -473,19 +579,29 @@ class Chatbot:
                 return answer
             
             elif self.state == ConversationState.AWAITING_CONTINUE_CHOICE:
-                response_text = self._handle_continue_choice(user_input)
-                self.chat_history.append(AIMessage(content=response_text))
-                
-                # Si el usuario eligió agente, mantener el estado para que el webhook detecte el bloqueo
-                if "Te conecto con un agente humano" in response_text:
-                    return response_text
-                # Si eligió seguir hablando, cambiar a estado de información
-                elif "¿Qué preguntas tienes" in response_text:
+                # Verificar si es una conversación natural (retomar después de pausa)
+                if self._is_natural_conversation_resumption(user_input):
+                    print(f"[DEBUG] Detectado retomar conversación natural. Reseteando flujo.")
+                    # Resetear el flujo como si fuera una nueva conversación
                     self.state = ConversationState.PROVIDING_INFO
-                    return response_text
-                # Si no entendió, mantener el mismo estado para volver a preguntar
+                    answer = self._safe_rag_answer(user_input)
+                    self.chat_history.append(AIMessage(content=answer))
+                    return answer
                 else:
-                    return response_text
+                    # Manejar como elección 1/2/agente
+                    response_text = self._handle_continue_choice(user_input)
+                    self.chat_history.append(AIMessage(content=response_text))
+                    
+                    # Si el usuario eligió agente, mantener el estado para que el webhook detecte el bloqueo
+                    if "Te conecto con un agente humano" in response_text:
+                        return response_text
+                    # Si eligió seguir hablando, cambiar a estado de información
+                    elif "¿Qué preguntas tienes" in response_text:
+                        self.state = ConversationState.PROVIDING_INFO
+                        return response_text
+                    # Si no entendió, mantener el mismo estado para volver a preguntar
+                    else:
+                        return response_text
                 
             elif self.state == ConversationState.PROVIDING_INFO:
                 # PRIORIDAD: Detectar confirmación de pasos 1 y 3 para enviar calendario

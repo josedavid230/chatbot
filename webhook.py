@@ -184,12 +184,12 @@ def should_change_to_human_state(chat_id: str, message_data: dict) -> tuple[bool
         if not is_bot_message_echo(msg_id):
             reasons.append("AGENTE_INTERVIENE")
     
-    # Caso 2: Cliente escribe "agente" 
-    text = message_data.get('text', '').lower()
-    if not message_data.get('fromMe', False) and 'agente' in text:
-        reasons.append("CLIENTE_SOLICITA_AGENTE")
+    # CASO 2 ELIMINADO: Los clientes (fromMe=false) NO activan intervención humana aquí
+    # La detección de "agente" en mensajes de cliente se maneja SOLO en main.py
+    # El webhook SOLO detecta intervención de agentes reales (fromMe=true)
     
     # Caso 3: Keyword específica de agente
+    text = message_data.get('text', '').lower().strip()
     if (message_data.get('fromMe', False) and 
         HUMAN_INTERVENTION_KEYWORD.lower() in text):
         reasons.append("AGENTE_KEYWORD")
@@ -568,27 +568,9 @@ def webhook():
                 
                 return jsonify({"ok": True, "skip": "human_state"}), 200
             
-            # Si está en estado BOT, verificar si el cliente solicita agente
-            message_data = {
-                'fromMe': False,
-                'text': text_in,
-                'id': key.get("id", "")
-            }
-            
-            should_change, reason = should_change_to_human_state(sender_number, message_data)
-            
-            if should_change:
-                print(f"[CLIENT REQUEST] {reason} en chat {sender_number}")
-                
-                # Cambiar estado a HUMANO en Redis
-                success = set_conversation_state(sender_number, STATE_HUMANO, reason)
-                if success:
-                    print(f"[REDIS] Estado cambiado a HUMANO para {sender_number}")
-                
-                # El bot responderá con mensaje de conexión y luego se silenciará
-                EXECUTOR.submit(handle_message_async, sender_number, text_in)
-                print(f"[ENQUEUED] agent connection task for {sender_number}")
-                return jsonify({"ok": True, "connecting_agent": True}), 200
+            # Los mensajes de clientes (fromMe=false) NO activan intervención humana en webhook
+            # La detección de "agente" se maneja ÚNICAMENTE en main.py (proceso del bot)
+            # El webhook solo detecta intervención real de agentes humanos (fromMe=true)
 
             # Estado BOT normal - procesar mensaje
             EXECUTOR.submit(handle_message_async, sender_number, text_in)
