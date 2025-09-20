@@ -266,6 +266,86 @@ class Chatbot:
         
         return any(phrase in text for phrase in agent_request_phrases)
 
+    def _is_returning_after_agent(self, user_input: str) -> bool:
+        """Detecta si el cliente está retomando la conversación después de haber hablado con un agente humano."""
+        try:
+            prompt = f"""
+            Analiza si el siguiente mensaje parece ser de un cliente que está retomando o continuando una conversación después de haber hablado con un agente humano.
+
+            MENSAJE DEL USUARIO: "{user_input}"
+
+            ¿Este mensaje indica que el cliente está retomando la conversación o necesita más ayuda?
+
+            Responde ÚNICAMENTE:
+            - "SÍ" si parece que retoma conversación, saluda de nuevo, o busca más ayuda
+            - "NO" si es una respuesta específica a opciones del bot
+
+            Indicadores de retomar conversación:
+            - Saludos nuevos: "Hola", "Buenos días", "Qué tal"
+            - Frases de continuación: "Necesito más información", "Tengo otra pregunta"
+            - Agradecimientos y nuevas consultas: "Gracias, pero también quería..."
+            - Mensajes naturales que no son respuestas a opciones específicas
+
+            Ejemplos:
+            - "Hola, tengo una pregunta adicional" → SÍ
+            - "Buenos días, necesito más información" → SÍ  
+            - "Gracias por la atención, pero quería saber..." → SÍ
+            - "¿Tienen otros servicios?" → SÍ
+            - "1" → NO (respuesta a opción)
+            - "agente" → NO (solicitud específica)
+            """
+            
+            response = self.llm.invoke(prompt).content.strip().upper()
+            
+            if "SÍ" in response or "SI" in response:
+                print(f"[DEBUG] LLM detectó cliente retomando conversación: {response}")
+                return True
+            else:
+                print(f"[DEBUG] LLM NO detectó retomar conversación: {response}")
+                return False
+                
+        except Exception as e:
+            print(f"[ERROR] Error en _is_returning_after_agent: {e}")
+            # Fallback: detectar saludos básicos y frases de retomar
+            return any(phrase in user_input.lower() for phrase in [
+                'hola', 'buenos días', 'buenas tardes', 'qué tal', 'necesito más', 'tengo otra', 'quería saber'
+            ])
+
+    def _generate_welcome_back_message(self, user_input: str) -> str:
+        """Genera un mensaje de bienvenida cálido para clientes que retoman la conversación."""
+        user_name = self.user_data.get('name', '')
+        name_part = f"{user_name}, " if user_name and user_name != 'no_identificable' else ""
+        
+        try:
+            prompt = f"""
+            Genera un mensaje de bienvenida cálido y profesional para un cliente que está retomando la conversación con Xtalento Bot después de haber hablado con un agente humano.
+
+            NOMBRE DEL CLIENTE: {name_part}
+            MENSAJE DEL CLIENTE: "{user_input}"
+
+            El mensaje debe:
+            1. Dar la bienvenida de vuelta de forma cálida
+            2. Agradecer por su regreso
+            3. Preguntar en qué podemos ayudarle
+            4. Ser profesional pero amigable
+            5. Usar el nombre si está disponible
+            6. Máximo 150 palabras
+
+            Ejemplos de tono:
+            - "¡{name_part}es un gusto tenerte de vuelta! Agradezco que regreses a conversar conmigo..."
+            - "¡Qué bueno verte de nuevo{name_part}! Me da mucho gusto que hayas decidido continuar..."
+
+            Genera el mensaje de bienvenida:
+            """
+            
+            response = self.llm.invoke(prompt).content.strip()
+            return response
+            
+        except Exception as e:
+            print(f"[ERROR] Error en _generate_welcome_back_message: {e}")
+            # Fallback mensaje estático
+            return f"¡{name_part}es un gusto tenerte de vuelta! 😊 Agradezco que regreses a conversar conmigo. Me da mucho gusto que hayas decidido continuar con nuestros servicios. ¿En qué más puedo ayudarte hoy?"
+
     def _is_natural_conversation_resumption(self, user_input: str) -> bool:
         """Detecta si el usuario está retomando una conversación de forma natural."""
         try:
@@ -608,8 +688,17 @@ class Chatbot:
                 return answer
             
             elif self.state == ConversationState.AWAITING_CONTINUE_CHOICE:
-                # Verificar si es una conversación natural (retomar después de pausa)
-                if self._is_natural_conversation_resumption(user_input):
+                # PRIORIDAD 1: Verificar si es un cliente retomando después de agente humano
+                if self._is_returning_after_agent(user_input):
+                    print(f"[DEBUG] Detectado cliente retomando conversación después de agente.")
+                    # Cambiar a estado de información y dar bienvenida cálida
+                    self.state = ConversationState.PROVIDING_INFO
+                    welcome_message = self._generate_welcome_back_message(user_input)
+                    self.chat_history.append(AIMessage(content=welcome_message))
+                    return welcome_message
+                
+                # PRIORIDAD 2: Verificar si es una conversación natural (retomar después de pausa)
+                elif self._is_natural_conversation_resumption(user_input):
                     print(f"[DEBUG] Detectado retomar conversación natural. Reseteando flujo.")
                     # Resetear el flujo como si fuera una nueva conversación
                     self.state = ConversationState.PROVIDING_INFO
@@ -633,7 +722,14 @@ class Chatbot:
                         return response_text
                 
             elif self.state == ConversationState.PROVIDING_INFO:
-                # PRIORIDAD: Detectar confirmación de pasos 1 y 3 usando memoria persistente
+                # PRIORIDAD 1: Verificar si es un cliente retomando después de agente humano
+                if self._is_returning_after_agent(user_input):
+                    print(f"[DEBUG] Detectado cliente retomando conversación después de agente en PROVIDING_INFO.")
+                    welcome_message = self._generate_welcome_back_message(user_input)
+                    self.chat_history.append(AIMessage(content=welcome_message))
+                    return welcome_message
+                
+                # PRIORIDAD 2: Detectar confirmación de pasos 1 y 3 usando memoria persistente
                 payment_status = self._detect_payment_confirmation(user_input)
                 
                 # Actualizar memoria de confirmaciones
