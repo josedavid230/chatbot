@@ -3,6 +3,8 @@
 
 
 import os
+import time
+import requests
 from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, UnstructuredFileLoader
 from langchain_community.vectorstores import FAISS
@@ -26,6 +28,12 @@ OPENAI_MODEL = "gpt-4o-mini"
 PAYMENT_FORM_URL = "https://forms.gle/vBDAguF19cSaDhAK6"
 CALENDAR_LINK = "https://n9.cl/fa5tz3"
 
+# --- Configuración para estado "escribiendo" ---
+BOT_TYPING_DELAY = 15  # segundos
+EVO_API_URL = os.getenv('EVO_API_URL', 'http://localhost:8080')
+EVO_APIKEY = os.getenv('EVO_APIKEY', '')
+EVO_INSTANCE = os.getenv('EVO_INSTANCE', '')
+
 # --- Estados de Conversación ---
 class ConversationState:
     AWAITING_GREETING = "AWAITING_GREETING"
@@ -34,6 +42,53 @@ class ConversationState:
     AWAITING_SERVICE_CHOICE = "AWAITING_SERVICE_CHOICE"
     AWAITING_CONTINUE_CHOICE = "AWAITING_CONTINUE_CHOICE"
     PROVIDING_INFO = "PROVIDING_INFO"
+
+# --- Funciones Auxiliares para Estado "Escribiendo" ---
+def _auth_headers():
+    """Devuelve headers de autenticación para Evolution API."""
+    return {
+        'Content-Type': 'application/json',
+        'apikey': EVO_APIKEY
+    }
+
+def send_typing_indicator(number: str) -> bool:
+    """Envía indicador de 'escribiendo...' a WhatsApp."""
+    try:
+        url = f"{EVO_API_URL}/chat/presence/{EVO_INSTANCE}"
+        payload = {
+            "number": number,
+            "presence": "composing"  # 'composing' = escribiendo
+        }
+        
+        print(f"[TYPING] Enviando indicador 'escribiendo' a {number}")
+        response = requests.post(url, headers=_auth_headers(), json=payload, timeout=10)
+        
+        if response.status_code in (200, 201):
+            print(f"[TYPING] ✅ Indicador enviado exitosamente")
+            return True
+        else:
+            print(f"[TYPING] ❌ Error al enviar indicador: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"[TYPING ERROR] No se pudo enviar indicador de escritura: {e}")
+        return False
+
+def simulate_typing_delay(number: str, delay_seconds: int = BOT_TYPING_DELAY):
+    """Simula que el bot está escribiendo por un tiempo determinado."""
+    try:
+        print(f"[TYPING] Iniciando simulación de escritura por {delay_seconds} segundos...")
+        
+        # Enviar indicador de 'escribiendo'
+        send_typing_indicator(number)
+        
+        # Esperar el tiempo especificado
+        time.sleep(delay_seconds)
+        
+        print(f"[TYPING] ✅ Simulación de escritura completada")
+        
+    except Exception as e:
+        print(f"[TYPING ERROR] Error durante simulación de escritura: {e}")
 
 # --- Lógica del Chatbot ---
 class Chatbot:
@@ -107,6 +162,15 @@ class Chatbot:
         question_answer_chain = create_stuff_documents_chain(self.llm, qa_prompt)
 
         self.rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+    
+    def _apply_typing_delay(self, user_number: str = None):
+        """Aplica retraso con indicador de escritura si hay un número de usuario disponible."""
+        if user_number and EVO_API_URL and EVO_APIKEY and EVO_INSTANCE:
+            simulate_typing_delay(user_number, BOT_TYPING_DELAY)
+        else:
+            # Si no hay configuración de API, simplemente esperar sin indicador
+            print(f"[TYPING] API no configurada, aplicando solo retraso de {BOT_TYPING_DELAY}s")
+            time.sleep(BOT_TYPING_DELAY)
 
     def _extract_role_from_text(self, text):
         """Extrae el cargo o rol laboral de un texto complejo."""
@@ -504,7 +568,7 @@ class Chatbot:
                 "O escribe 'agente' para conectarte directamente."
             )
 
-    def process_message(self, user_input):
+    def process_message(self, user_input, user_number: str = None):
         try:
             # PRIORIDAD MÁXIMA: Detectar solicitud de agente humano ANTES de cualquier procesamiento
             # Solo activar con palabra exacta "agente" o frases específicas de solicitud
@@ -535,6 +599,9 @@ class Chatbot:
             
             # Los saludos iniciales no necesitan memoria ni RAG
             if self.state == ConversationState.AWAITING_GREETING:
+                # Aplicar retraso con indicador de escritura
+                self._apply_typing_delay(user_number)
+                
                 self.state = ConversationState.AWAITING_NAME_CITY
                 prompt = "Actúas como Xtalento Bot. Genera un saludo inicial cálido y profesional que comience exactamente con la palabra '¡Hola! 👋'. A continuación, preséntate brevemente y pide al usuario su nombre y la ciudad desde la que escribe. IMPORTANTE: Solo habla de servicios y información que tienes conocimiento confirmado en tu base de datos."
                 response_text = self._generate_response(prompt)
@@ -551,6 +618,8 @@ class Chatbot:
                 ])
                 if is_question:
                     print(f"[DEBUG] Se detectó una pregunta en lugar de nombre/ciudad. Respondiendo sin interrumpir la conversación.")
+                    # Aplicar retraso con indicador de escritura
+                    self._apply_typing_delay(user_number)
                     answer = self._safe_rag_answer(user_input)
                     self.chat_history.append(AIMessage(content=answer))
                     return answer
@@ -559,6 +628,10 @@ class Chatbot:
                 user_name = self._extract_name(user_input)
                 self.user_data['name'] = user_name
                 self.state = ConversationState.AWAITING_ROLE_INPUT
+                
+                # Aplicar retraso con indicador de escritura
+                self._apply_typing_delay(user_number)
+                
                 prompt = f"Actúas como Xtalento Bot. El usuario se llama {user_name}. Dale una bienvenida personalizada (sin usar la palabra 'Hola') y luego pregúntale sobre su cargo actual o al que aspira para poder darle una mejor asesoría. IMPORTANTE: Solo habla de servicios que tienes conocimiento confirmado. Si no sabes algo específico, di 'Actualmente no tengo conocimiento sobre esto. Si quieres comunicarte con un humano, menciona la palabra agente en el chat.'"
                 response_text = self._generate_response(prompt)
                 self.chat_history.append(AIMessage(content=response_text))
@@ -573,6 +646,10 @@ class Chatbot:
 
                 self.user_data['role'] = role_classification
                 self.state = ConversationState.AWAITING_SERVICE_CHOICE
+                
+                # Aplicar retraso con indicador de escritura
+                self._apply_typing_delay(user_number)
+                
                 prompt = f"""
                 Actúas como Xtalento Bot. Presenta los siguientes servicios en una lista numerada sin mencionar ni revelar la categoría/nivel del usuario:
                 Gracias por tu interés en Xtalento. Te contamos que ayudamos a personas como tú a potenciar su perfil profesional y conseguir trabajo más rápido.
@@ -636,6 +713,23 @@ class Chatbot:
                     self.chat_history.append(AIMessage(content=mx_answer))
                     return mx_answer
 
+                # PASO 1: Enviar mensaje de diagnóstico gratuito primero
+                # Aplicar retraso con indicador de escritura
+                self._apply_typing_delay(user_number)
+                
+                diagnostic_message = (
+                    f"¡Nos encantaría conocerte y trabajar contigo! 🎉\n\n"
+                    f"Te ofrecemos un diagnóstico virtual (sin costo) para revisar tu perfil y a partir de este diagnóstico generar junto contigo una Estrategia Laboral Personalizada.\n\n"
+                    f"Separa un espacio en el siguiente link:\n"
+                    f"🗓️ {CALENDAR_LINK}\n\n"
+                    f"A continuación te comparto la información detallada del servicio que seleccionaste: 👇"
+                )
+                self.chat_history.append(AIMessage(content=diagnostic_message))
+                
+                # PASO 2: Esperar un poco más antes del segundo mensaje (información detallada)
+                self._apply_typing_delay(user_number)
+                
+                # PASO 3: Enviar información detallada con precios
                 user_role = self.user_data.get('role', 'táctico')
 
                 query = (
@@ -685,7 +779,9 @@ class Chatbot:
                 )
                 answer = self._safe_rag_answer(query)
                 self.chat_history.append(AIMessage(content=answer))
-                return answer
+                
+                # Retornar ambos mensajes concatenados para el sistema de logging
+                return f"{diagnostic_message}\n\n{answer}"
             
             elif self.state == ConversationState.AWAITING_CONTINUE_CHOICE:
                 # PRIORIDAD 1: Verificar si es un cliente retomando después de agente humano

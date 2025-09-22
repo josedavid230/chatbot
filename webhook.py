@@ -29,6 +29,9 @@ from datetime import datetime, timedelta
 # Keyword para detección de intervención humana (mantener solo para fromMe)
 HUMAN_INTERVENTION_KEYWORD = "Hola soy un agente de ventas de xtalento, gracias por escribir"
 
+# Sufijo invisible para identificar mensajes del bot de forma robusta
+BOT_SECRET_SUFFIX = "\u200B"  # Carácter invisible (espacio de ancho cero)
+
 # ===== SISTEMA REDIS PARA ESTADOS DE CONVERSACIÓN =====
 
 # Estados de conversación
@@ -240,27 +243,42 @@ def is_bot_message_echo(message_id: str, chat_id: str = "", content: str = "") -
 
 def should_change_to_human_state(chat_id: str, message_data: dict) -> tuple[bool, str]:
     """
-    Determina si se debe cambiar a estado HUMANO y por qué razón.
+    Determina si se debe cambiar a estado HUMANO basado en la detección de intervención humana.
+    
+    MÉTODO DEL SUFIJO INVISIBLE (Robusta detección de ecos del bot):
+    - Todos los mensajes del bot incluyen automáticamente BOT_SECRET_SUFFIX (\u200B)
+    - Si un mensaje fromMe=true NO tiene este sufijo → es de un agente humano
+    - Elimina los problemas de race conditions y detección por timing/contenido
+    
+    CASOS DE CAMBIO A ESTADO HUMANO:
+    1. Mensaje fromMe=true que NO tiene el sufijo invisible del bot (AGENTE_INTERVIENE_SUFIJO)
+    2. Keyword específica de agente en mensaje fromMe=true (AGENTE_KEYWORD) - método de respaldo
     
     Returns:
-        (should_change: bool, reason: str)
+        tuple[bool, str]: (should_change, reason)
     """
     reasons = []
     
-    # Caso 1: Mensaje fromMe que no es eco del bot (agente interviene)
+    # Caso 1: Mensaje fromMe - DETECCIÓN POR SUFIJO INVISIBLE (más robusta)
     if message_data.get('fromMe', False):
         msg_id = message_data.get('id', '')
+        message_text = message_data.get('text', '')
+        
         print(f"[HUMAN DETECTION] Verificando mensaje fromMe. ID: {msg_id}")
-        print(f"[HUMAN DETECTION] IDs del bot en memoria: {list(BOT_SENT_MESSAGE_IDS)}")
+        print(f"[HUMAN DETECTION] Texto: '{message_text}' (len: {len(message_text)})")
         
-        # Extraer contenido y chat_id para detección robusta
-        agent_text = message_data.get('text', '')
-        is_echo = is_bot_message_echo(msg_id, chat_id, agent_text)
-        print(f"[HUMAN DETECTION] ¿Es eco del bot? {is_echo}")
+        # MÉTODO PRINCIPAL: Verificar sufijo invisible
+        if message_text.endswith(BOT_SECRET_SUFFIX):
+            print(f"[HUMAN DETECTION] ✅ SUFIJO INVISIBLE encontrado → ES ECO DEL BOT")
+            is_bot_echo = True
+        else:
+            print(f"[HUMAN DETECTION] ❌ SUFIJO INVISIBLE NO encontrado → ES AGENTE HUMANO")
+            is_bot_echo = False
         
-        if not is_echo:
-            print(f"[HUMAN DETECTION] ❌ NO es eco del bot → DETECTANDO AGENTE_INTERVIENE")
-            reasons.append("AGENTE_INTERVIENE")
+        # Si no es eco del bot, entonces es intervención de agente
+        if not is_bot_echo:
+            print(f"[HUMAN DETECTION] ⚠️ AGENTE HUMANO DETECTADO via sufijo invisible")
+            reasons.append("AGENTE_INTERVIENE_SUFIJO")
         else:
             print(f"[HUMAN DETECTION] ✅ ES eco del bot → Ignorando mensaje")
     
@@ -268,10 +286,11 @@ def should_change_to_human_state(chat_id: str, message_data: dict) -> tuple[bool
     # La detección de "agente" en mensajes de cliente se maneja SOLO en main.py
     # El webhook SOLO detecta intervención de agentes reales (fromMe=true)
     
-    # Caso 3: Keyword específica de agente
+    # Caso 2: Keyword específica de agente (método de respaldo adicional)
     text = message_data.get('text', '').lower().strip()
     if (message_data.get('fromMe', False) and 
         HUMAN_INTERVENTION_KEYWORD.lower() in text):
+        print(f"[HUMAN DETECTION] ⚠️ AGENTE HUMANO DETECTADO via keyword específica")
         reasons.append("AGENTE_KEYWORD")
     
     if reasons:
@@ -387,15 +406,23 @@ def _extract_text_from_baileys(message_obj: dict) -> str | None:
     return None
 
 def send_whatsapp_text(number: str, text: str) -> tuple[int, str]:
-    """Envía texto (solo chats 1:1) probando variantes de endpoint y payload según versión de Evolution."""
+    """Envía texto (solo chats 1:1) probando variantes de endpoint y payload según versión de Evolution.
+    
+    NOTA: Automáticamente agrega el sufijo invisible BOT_SECRET_SUFFIX al final del mensaje
+    para permitir la detección robusta de ecos del bot en el webhook.
+    """
+    # PASO 1: Agregar sufijo invisible para detección de ecos del bot
+    message_with_suffix = text + BOT_SECRET_SUFFIX
+    print(f"[SEND BOT] Agregando sufijo invisible. Texto original: {len(text)} chars -> Con sufijo: {len(message_with_suffix)} chars")
     endpoints = [
         f"{EVO_API_URL}/message/sendText/{EVO_INSTANCE}",
         f"{EVO_API_URL}/v2/message/sendText/{EVO_INSTANCE}",
     ]
+    # PASO 2: Usar el mensaje con sufijo en todos los payloads
     payload_variants: list[dict] = [
-        {"number": number, "text": text},  # muchas versiones requieren 'text' plano
-        {"number": number, "message": text},  # alternativa legacy
-        {"number": number, "options": {"presence": "composing"}, "textMessage": {"text": text}},  # variante moderna
+        {"number": number, "text": message_with_suffix},  # muchas versiones requieren 'text' plano
+        {"number": number, "message": message_with_suffix},  # alternativa legacy
+        {"number": number, "options": {"presence": "composing"}, "textMessage": {"text": message_with_suffix}},  # variante moderna
     ]
     retry_statuses = set([429] + list(range(500, 600)))
     last_status, last_text = 0, ""
